@@ -30,7 +30,7 @@
     #bg-canvas{position:fixed;inset:0;z-index:-1}
 
     /* nav capsule */
-    #spa-nav{position:sticky;top:0;z-index:10;display:flex;gap:8px;overflow-x:auto;
+    #spa-nav{position:sticky;top:0;z-index:10;display:flex;gap:8px;overflow:visible;
       padding:8px;margin:8px 0 18px;background:rgba(10,12,22,.6);backdrop-filter:blur(10px);
       border:1px solid rgba(255,255,255,.06);border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.35);
       white-space:nowrap;
@@ -129,7 +129,7 @@
   
 /* --- Nav: carousel style + hide scrollbar line --- */
 #spa-nav{
-  overflow-x:auto; white-space:nowrap; border-bottom:none;
+  overflow:visible; white-space:nowrap; border-bottom:none;
   -ms-overflow-style: none;  /* IE/Edge */
   scrollbar-width: none;     /* Firefox */
   mask-image: linear-gradient(to right, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
@@ -142,7 +142,9 @@
   opacity:.86;
 }
 #spa-nav .btn.active{ opacity:1 }
-#spa-nav .track{display:flex; gap:8px; scroll-snap-type: x mandatory}
+#spa-nav .track{display:flex; gap:8px; scroll-snap-type: x mandatory
+  overflow-x:auto;
+  -webkit-overflow-scrolling: touch;}
 
 
 /* Leaderboard bars */
@@ -638,16 +640,16 @@
 
   // Drag scroll with threshold
   let isDown=false, sx=0, sl=0;
-  nav.addEventListener('pointerdown', (e)=>{
-    isDown=true; dragged=false; sx=e.clientX; sl=nav.scrollLeft; nav.setPointerCapture(e.pointerId);
+  track.addEventListener('pointerdown', (e)=>{ if (!ALLOW_DRAG) return;
+    isDown=true; dragged=false; sx=e.clientX; sl = track.scrollLeft; track.setPointerCapture(e.pointerId);
   });
-  nav.addEventListener('pointermove', (e)=>{
+  track.addEventListener('pointermove', (e)=>{ if (!ALLOW_DRAG) return;
     if(!isDown) return;
     const dx = e.clientX - sx;
     if (Math.abs(dx) > 6) dragged = true;
-    nav.scrollLeft = sl - dx;
+    track.scrollLeft = sl - dx;
   });
-  nav.addEventListener('pointerup', ()=>{ isDown=false; });
+  track.addEventListener('pointerup', ()=>{ isDown=false; });
 
   // Keyboard support
   track.querySelectorAll('[data-page]').forEach(a=>{
@@ -671,7 +673,9 @@
   const track = nav.querySelector('.track');
   const links = [...track.querySelectorAll('[data-page]')];
   const bubble = track.querySelector('.bubble');
-  function moveBubble(){
+  
+  const ALLOW_DRAG = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+function moveBubble(){
     const a = track.querySelector('.btn.active') || links[0];
     if(!a) return;
     const r = a.getBoundingClientRect();
@@ -687,11 +691,11 @@
   window.__centerNavActive = centerActive;
   // delegated clicks + drag threshold
   let isDown=false, sx=0, sl=0, moved=false;
-  nav.addEventListener('pointerdown', (e)=>{isDown=true;moved=false;sx=e.clientX;sl=nav.scrollLeft;nav.setPointerCapture(e.pointerId)});
-  nav.addEventListener('pointermove', (e)=>{ if(!isDown) return; const dx=e.clientX-sx; if(Math.abs(dx)>6) moved=true; nav.scrollLeft=sl-dx; moveBubble();});
-  nav.addEventListener('pointerup', ()=>{isDown=false});
-  track.addEventListener('click', (e)=>{ if(moved) {moved=false; return;} const a=e.target.closest('[data-page]'); if(!a) return; e.preventDefault(); show(a.getAttribute('data-page')); history.replaceState(null,'','#'+a.getAttribute('data-page')); });
-  nav.addEventListener('scroll', ()=>{ // update scaling + bubble on scroll
+  track.addEventListener('pointerdown', (e)=>{ if (!ALLOW_DRAG) return;isDown=true;moved=false;sx=e.clientX;sl = track.scrollLeft;track.setPointerCapture(e.pointerId)});
+  track.addEventListener('pointermove', (e)=>{ if (!ALLOW_DRAG) return; if(!isDown) return; const dx=e.clientX-sx; if(Math.abs(dx)>6) moved=true; track.scrollLeft = sl-dx; moveBubble();});
+  track.addEventListener('pointerup', ()=>{isDown=false});
+  track.addEventListener('click', (e)=>{ if (ALLOW_DRAG && moved) { moved=false; return; } const a=e.target.closest('[data-page]'); if(!a) return; e.preventDefault(); show(a.getAttribute('data-page')); history.replaceState(null,'','#'+a.getAttribute('data-page')); });
+  track.addEventListener('scroll', ()=>{ // update scaling + bubble on scroll
     requestAnimationFrame(()=>{ scaleItems(); moveBubble(); });
   }, {passive:true});
   window.addEventListener('resize', ()=>{ scaleItems(); moveBubble(); });
@@ -1518,7 +1522,9 @@ END:VCALENDAR`], {type:'text/calendar'});
   const track = nav.querySelector('.track');
   const links = [...track.querySelectorAll('[data-page]')];
   const bubble = track.querySelector('.bubble');
-  const pages = document.querySelectorAll('section.page');
+  
+  const ALLOW_DRAG = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+const pages = document.querySelectorAll('section.page');
 
   function show(id){
     pages.forEach(p=>p.classList.toggle('active', p.id===id));
@@ -1540,10 +1546,10 @@ END:VCALENDAR`], {type:'text/calendar'});
   });
 
   let isDown=false, sx=0, sl=0;
-  track.addEventListener('pointerdown', (e)=>{
+  track.addEventListener('pointerdown', (e)=>{ if (!ALLOW_DRAG) return;
     isDown = true; dragging = false; sx = e.clientX; sl = track.scrollLeft; track.setPointerCapture(e.pointerId);
   });
-  track.addEventListener('pointermove', (e)=>{
+  track.addEventListener('pointermove', (e)=>{ if (!ALLOW_DRAG) return;
     if(!isDown) return;
     const dx = e.clientX - sx;
     if(Math.abs(dx) > 6) dragging = true;
