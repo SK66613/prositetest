@@ -989,28 +989,58 @@ setTimeout(()=>{ scaleItems(); moveBubble(); }, 60);
   });
 })();
 
-
-// === Bonuses: simple spin wheel ===
+// === Bonuses: spin wheel (single & deduped) ===
 (function(){
-  const btn = document.getElementById('spin');
-  const out = document.getElementById('spinRes');
-  if(!btn || !out) return;
-  const prizes = ['🎁 Шаблон «Оффер»','📘 Чек-лист аудита','💬 +30 мин консультации','🧮 Доступ к калькулятору PRO','⭐ Приоритетный разбор'];
+  const section = document.getElementById('bonuses'); if (!section) return;
+  const btn0 = section.querySelector('#spin');
+  const out  = section.querySelector('#spinRes');
+  if (!btn0 || !out) return;
+
+  // 1) Жёстко снимаем ВСЕ старые слушатели с кнопки
+  const btn = btn0.cloneNode(true);
+  btn0.replaceWith(btn);
+
+  // 2) Синглтон-анонс приза (не даст показать тост дважды)
+  const announcePrize = (() => {
+    let locked = false, timer;
+    return (text) => {
+      if (locked) return;
+      locked = true;
+      try { showToast('Поздравляю!', text); } catch(e){}
+      clearTimeout(timer);
+      timer = setTimeout(() => { locked = false; }, 1500);
+    };
+  })();
+
+  // 3) Само вращение
+  const prizes = [
+    '🎁 Шаблон «Оффер»',
+    '📘 Чек-лист аудита',
+    '💬 +30 мин консультации',
+    '🧮 Доступ к калькулятору PRO',
+    '⭐ Приоритетный разбор'
+  ];
+
   let busy = false;
-  btn.addEventListener('click', ()=>{
-    if(busy) return; busy = true; out.textContent = 'Крутим…';
-    let t = 0, total = 1800 + Math.floor(Math.random()*900);
-    const timer = setInterval(()=>{
-      t += 30;
-      if(t >= total){
-        clearInterval(timer); busy = false;
-        const win = prizes[Math.floor(Math.random()*prizes.length)];
+  btn.addEventListener('click', () => {
+    if (busy) return;
+    busy = true;
+    out.textContent = 'Крутим…';
+
+    const total = 1800 + Math.floor(Math.random() * 900);
+    const t0 = performance.now();
+
+    const tick = (t) => {
+      if (t - t0 >= total) {
+        const win = prizes[Math.floor(Math.random() * prizes.length)];
         out.textContent = 'Выпало: ' + win;
-        showToast('Поздравляю!', win);
-      } else {
-        out.textContent = 'Крутим…';
+        announcePrize(win);       // ← тост гарантированно один раз
+        busy = false;
+        return;
       }
-    }, 30);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   });
 })();
 
@@ -1459,23 +1489,6 @@ document.querySelectorAll('.copy').forEach(b=>b.addEventListener('click', async 
     showToast('Спасибо!', 'Твой голос учтён');
   }));
 })();
-
-// ===== Roulette =====
-(function(){
-  const prizes = ['🎁 Чек‑лист','🗂 Шаблоны','📞 30‑мин консультация','💡 Идея‑аудит','⭐️ Приоритет в чате'];
-  const btn = document.getElementById('spin'); if(!btn) return;
-  const out = document.getElementById('spinRes');
-  btn.onclick = ()=>{
-    btn.disabled = true;
-    let t = 0, idx = 0;
-    const id = setInterval(()=>{
-      idx = (idx+1)%prizes.length;
-      out.textContent = '… ' + prizes[idx];
-      if(++t>25){ clearInterval(id); btn.disabled=false; out.textContent = 'Твой приз: ' + prizes[Math.floor(Math.random()*prizes.length)]; showToast('Поздравляем!', out.textContent); }
-    }, 80);
-  };
-})();
-
 
 // ===== Consultation booking =====
 (function(){
