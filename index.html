@@ -43,7 +43,7 @@
     #spa-nav .btn:hover{background:rgba(255,255,255,.08)}
     #spa-nav .btn.active{background:linear-gradient(135deg,var(--primary),var(--blue));color:#fff;box-shadow:0 10px 22px rgba(91,140,255,.35);max-width:none}
 
-    .h1{font-size:23px;line-height:1.2;font-weight:800;margin:14px 0 10px}
+    .h1{font-size:19px;line-height:1.2;font-weight:800;margin:14px 0 10px}
     .h1 span{background:linear-gradient(90deg,var(--primary),var(--mint));-webkit-background-clip:text;color:transparent}
     .lead{color:var(--muted);font-size:17px;max-width:820px}
 
@@ -60,7 +60,7 @@
     .dot{width:10px;height:10px;border-radius:50%;margin-top:6px;background:linear-gradient(135deg,var(--mint),var(--primary))}
 
     .cta{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
-    .btn{appearance:none;border:none;border-radius:14px;padding:12px 16px;font-weight:700;font-size:15px;cursor:pointer;
+    .btn{appearance:none;border:none;border-radius:14px;padding:10px 12px;font-weight:700;font-size:12px;cursor:pointer;
       display:inline-flex;align-items:center;gap:8px;text-decoration:none;transition:.18s;position:relative;overflow:hidden}
     .btn-primary{background:linear-gradient(135deg,var(--primary),var(--blue));color:#fff;box-shadow:0 10px 26px rgba(91,140,255,.32)}
     .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.18);color:var(--text)}
@@ -83,7 +83,7 @@
     .savings input[type=range]{width:100%}
     .savings .stat{display:flex;gap:10px;flex-wrap:wrap}
     .badge{padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);font-weight:700}
-    .big{font-size:28px;font-weight:800}
+    .big{font-size:19px;font-weight:800}
 
     /* Toasts */
     .toasts{position:fixed;right:14px;top:14px;display:flex;flex-direction:column;gap:8px;z-index:1000}
@@ -119,6 +119,7 @@
     @media(max-width:480px){
       html,body{font-size:14px}
       header.container{padding:12px 12px}
+      .logo{margin-left:12px;}
       .logo{width:36px;height:36px;border-radius:10px}
       .brand{font-size:18px}
       #spa-nav{gap:6px;padding:6px}
@@ -280,7 +281,7 @@ section.page > * + *{ margin-top: var(--section-gap) !important; }
 /* Typography */
 body{ font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
 .brand{ font-family: 'Montserrat', sans-serif !important; }
-.h1{ font-size: clamp(24px, 3.4vw + 12px, 56px) !important; line-height: 1.15; font-weight: 800; margin: 0 0 8px; }
+.h1{ font-size: clamp(19px, 3.4vw + 12px, 56px)  line-height: 1.15; font-weight: 800; margin: 0 0 4px; }
 
 
 /* === v15: layout normalizer (uniform paddings & width) === */
@@ -362,16 +363,16 @@ section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
           <input id="pct" type="range" min="1" max="30" step="1" value="12">
         </div>
         <div class="stat">
-          <div class="badge">Старые налоги: <span id="oldTax">1 500 000 ₽</span></div>
-          <div class="badge">Новые налоги: <span id="newTax">1 320 000 ₽</span></div>
+          <div class="badge">Было: <span id="oldTax">1 500 000 ₽</span></div>
+          <div class="badge">Стало: <span id="newTax">1 320 000 ₽</span></div>
         </div>
         <div>Потенциальная экономия:</div>
         <div class="big" id="saveCounter">0 ₽</div>
         <div class="cta"><button class="btn btn-primary confetti" id="ctaCalc">Получить персональный расчёт</button></div>
       </div>
-<div class="card reveal" style="margin-bottom:12px"><h3 style="margin:0 0 8px">Как мы работаем</h3><div id="flow" style="display:grid;gap:8px"><div class="badge">Шаг 1 · Диагностика</div><div class="badge">Шаг 2 · План оптимизации</div><div class="badge">Шаг 3 · Внедрение</div><div class="badge">Шаг 4 · Контроль и отчёты</div></div><div class="cta" style="margin-top:10px"><button class="btn btn-primary" id="flowNext">Дальше</button><button class="btn btn-ghost" id="flowReset">Сбросить</button></div></div>
+<div class="card reveal" style="margin-bottom:12px"><div class="h1 reveal" style="margin-bottom:20px">Как <span>мы</span> работаем</div><div id="flow" style="display:grid;gap:8px"><div class="badge">Шаг 1 · Диагностика</div><div class="badge">Шаг 2 · План оптимизации</div><div class="badge">Шаг 3 · Внедрение</div><div class="badge">Шаг 4 · Контроль и отчёты</div></div><div class="cta" style="margin-top:10px"><button class="btn btn-primary" id="flowNext">Дальше</button><button class="btn btn-ghost" id="flowReset">Сбросить</button></div></div>
       <div class="card">
-        <h3>Что дальше?</h3>
+        <div class="h1 reveal" style="margin-bottom:20px">Что <span>делать</span> дальше</div>
         <ul class="list">
           <li><span class="dot"></span>Запускаем калькулятор в боте</li>
           <li><span class="dot"></span>Фиксируем источник «утечек»</li>
@@ -403,7 +404,7 @@ section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
 <div class="card reveal"><h3>Тарифы</h3><div class="cta"><button class="btn btn-primary svcMode" data-mode="month">Месяц</button><button class="btn btn-ghost svcMode" data-mode="year">Год −15%</button></div></div><div class="card price reveal" data-base="30000"><h3>📈 Продвижение на Авито</h3><p class="lead" style="font-size:14px">Ваши объявления будут выходить на первые позиции — поток заявок при минимальном бюджете.</p><div class="big" data-price>30,000 ₽</div></div><div class="card price reveal" data-base="60000"><h3>🎯 Контекстная реклама</h3><p class="lead" style="font-size:14px">Яндекс.Директ и Google Ads: кампании без слива бюджета, под ваши KPI.</p><div class="big" data-price>60,000 ₽</div></div><div class="card price reveal" data-base="45000"><h3>🔍 SEO и сайты (Tilda/MODx)</h3><p class="lead" style="font-size:14px">Сайт‑магнит: оптимизация, структура, тексты под спрос.</p><div class="big" data-price>45,000 ₽</div></div><div class="card price reveal" data-base="55000"><h3>🤖 CRM и чат‑боты</h3><p class="lead" style="font-size:14px">Amo/Bitrix24 + боты: заявки 24/7, ничего не теряется.</p><div class="big" data-price>55,000 ₽</div></div><div class="card price reveal" data-base="40000"><h3>🛒 Маркетплейсы</h3><p class="lead" style="font-size:14px">Карточки под ключ: фото, описание, ключи, продвижение в площадке.</p><div class="big" data-price>40,000 ₽</div></div><div class="card price reveal" data-base="50000"><h3>📊 Аналитика и стратегия</h3><p class="lead" style="font-size:14px">Сквозная аналитика + карта действий на 6–12 мес.</p><div class="big" data-price>50,000 ₽</div></div><div class="card price reveal" data-base="35000"><h3>💬 Репутация и SMM</h3><p class="lead" style="font-size:14px">Образ бренда и работа с отзывами.</p><div class="big" data-price>35,000 ₽</div></div><div class="card price reveal" data-base="38000"><h3>📲 Telegram‑маркетинг</h3><p class="lead" style="font-size:14px">Канал, рассылки, воронки, связка с CRM.</p><div class="big" data-price>38,000 ₽</div></div><div class="card price reveal" data-base="70000"><h3>⚡ Mini‑Apps в Telegram</h3><p class="lead" style="font-size:14px">Калькуляторы, квизы, лид‑формы, интеграции.</p><div class="big" data-price>70,000 ₽</div></div>
     </div>
 <div class="card reveal" style="margin-bottom:12px">
-  <h3>Быстрый квиз: что даст наибольшую экономию?</h3>
+  <div class="h1 reveal">Быстрый квиз: <span>что даст</span> наибольшую экономию?</div>
   <div id="quiz" data-step="0">
     <div id="q0" class="q">
       <div class="lead" style="font-size:14px">Выручка в месяц?</div>
@@ -647,7 +648,6 @@ section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
   <section class="page" id="consult">
     <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
     <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
-
     <!-- KPI marquee -->
     <div class="kpi-strip reveal">
       <div class="kpi-track" id="kpiTrack">
@@ -661,6 +661,7 @@ section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
         <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
         <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
       </div>
+    </div>
     <div class="grid grid-2">
       <div class="card reveal">
         <h3>Выберите формат</h3>
@@ -752,7 +753,7 @@ section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
 <!-- Onboarding -->
 <div class="onb" id="onb">
   <div class="box">
-    <div class="h1" style="font-size:24px">Добро пожаловать! 👋</div>
+    <div class="h1" style="font-size:19px">Добро пожаловать! 👋</div>
     <div class="steps">
       <div class="step"><div class="num">1</div><div>Нажмите <b>📊 Калькулятор</b> — за 5 минут увидите, где экономия.</div></div>
       <div class="step"><div class="num">2</div><div>Откройте <b>Услуги</b> — там быстрые шаги по регистрации и аудиту.</div></div>
@@ -1155,7 +1156,7 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
         priceNode.textContent = fmtRUR(base);
       }else{
         const y = Math.round(base*12*0.85);
-        priceNode.textContent = fmtRUR(y) + ' / год (−15%)';
+        priceNode.textContent = fmtRUR(y) + ' / 12 мес.';
       }
     });
     btns.forEach(b=>{
