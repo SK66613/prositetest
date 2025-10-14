@@ -218,6 +218,42 @@
   padding-right: calc(var(--btn-pad-x, 12px) + var(--nav-active-pad-extra));
 }
 
+
+/* === Global vertical rhythm & paddings === */
+:root{
+  --space-1: 6px; --space-2: 10px; --space-3: 14px; --space-4: 18px;
+  --section-gap: 28px;
+}
+.container{max-width:1080px;margin:0 auto;padding:18px 18px 28px!important;}
+section.page > * + *{ margin-top: var(--section-gap); }
+.grid{ gap: var(--space-2) !important; }
+.card + .card{ margin-top: var(--space-3); }
+
+
+/* === v13: global paddings & spacing === */
+section.page{ padding-left:18px; padding-right:18px; }
+@media (min-width:1024px){ section.page{ padding-left:24px; padding-right:24px; } }
+
+/* vertical rhythm */
+:root{ --section-gap: 28px; --space-2: 10px; --space-3: 14px; }
+section.page > * + *{ margin-top: var(--section-gap); }
+.grid{ gap: var(--space-2) !important; }
+.card + .card{ margin-top: var(--space-3); }
+
+/* KPI pills micro-gaps */
+.kpi-track{ display:flex; gap:22px; padding:10px 12px; }
+.kpi{ display:inline-flex; align-items:center; gap:6px; }
+.kpi .v{ margin-left:4px; }
+
+/* bonuses: ticker/marquee safe spacing */
+.marquee,.ticker{ margin-bottom:14px; }
+.marquee + .card, .ticker + .card{ margin-top:14px; }
+
+/* consult: show time slots only after date select */
+#consult #slots{ display:none; gap:10px; flex-wrap:wrap; }
+#consult #slots.show{ display:flex; }
+#consult .dur{ min-width:88px; text-align:center; }
+
 </style>
 </head>
 <body>
@@ -260,7 +296,7 @@
     <!-- Savings widget -->
     <div class="grid grid-2 reveal" style="margin-top:14px">
       <div class="card savings">
-        <div class="h1 reveal">Бытрый <span>расчет прибыли</span> бизнеса</div>
+        <div class="h1 reveal">Быстрый <span>расчет прибыли</span> бизнеса</div>
         <div class="row">
           <label>Выручка: <strong id="revVal">10 000 000 ₽</strong></label>
           <input id="rev" type="range" min="500000" max="50000000" step="500000" value="10000000">
@@ -287,16 +323,29 @@
         </ul>
         <div class="highlight-banner" style="text-align:left"><strong>Бонус:</strong> мини‑гайд «Как перейти на выгодный режим»</div>
       </div>
-    </div>
+
   </section>
 
   <section class="page" id="services">
 <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
 <div class="card reveal"><h3>Тарифы</h3><div class="cta"><button class="btn btn-primary svcMode" data-mode="month">Месяц</button><button class="btn btn-ghost svcMode" data-mode="year">Год −15%</button></div></div><div class="card price reveal" data-base="30000"><h3>📈 Продвижение на Авито</h3><p class="lead" style="font-size:14px">Ваши объявления будут выходить на первые позиции — поток заявок при минимальном бюджете.</p><div class="big" data-price>30,000 ₽</div></div><div class="card price reveal" data-base="60000"><h3>🎯 Контекстная реклама</h3><p class="lead" style="font-size:14px">Яндекс.Директ и Google Ads: кампании без слива бюджета, под ваши KPI.</p><div class="big" data-price>60,000 ₽</div></div><div class="card price reveal" data-base="45000"><h3>🔍 SEO и сайты (Tilda/MODx)</h3><p class="lead" style="font-size:14px">Сайт‑магнит: оптимизация, структура, тексты под спрос.</p><div class="big" data-price>45,000 ₽</div></div><div class="card price reveal" data-base="55000"><h3>🤖 CRM и чат‑боты</h3><p class="lead" style="font-size:14px">Amo/Bitrix24 + боты: заявки 24/7, ничего не теряется.</p><div class="big" data-price>55,000 ₽</div></div><div class="card price reveal" data-base="40000"><h3>🛒 Маркетплейсы</h3><p class="lead" style="font-size:14px">Карточки под ключ: фото, описание, ключи, продвижение в площадке.</p><div class="big" data-price>40,000 ₽</div></div><div class="card price reveal" data-base="50000"><h3>📊 Аналитика и стратегия</h3><p class="lead" style="font-size:14px">Сквозная аналитика + карта действий на 6–12 мес.</p><div class="big" data-price>50,000 ₽</div></div><div class="card price reveal" data-base="35000"><h3>💬 Репутация и SMM</h3><p class="lead" style="font-size:14px">Образ бренда и работа с отзывами.</p><div class="big" data-price>35,000 ₽</div></div><div class="card price reveal" data-base="38000"><h3>📲 Telegram‑маркетинг</h3><p class="lead" style="font-size:14px">Канал, рассылки, воронки, связка с CRM.</p><div class="big" data-price>38,000 ₽</div></div><div class="card price reveal" data-base="70000"><h3>⚡ Mini‑Apps в Telegram</h3><p class="lead" style="font-size:14px">Калькуляторы, квизы, лид‑формы, интеграции.</p><div class="big" data-price>70,000 ₽</div></div>
-    
-<div class="card reveal" style="margin-bottom:12px"><h3 style="margin:0 0 8px">Как мы работаем</h3><div id="flow" style="display:grid;gap:8px"><div class="badge">Шаг 1 · Диагностика</div><div class="badge">Шаг 2 · План оптимизации</div><div class="badge">Шаг 3 · Внедрение</div><div class="badge">Шаг 4 · Контроль и отчёты</div></div><div class="cta" style="margin-top:10px"><button class="btn btn-primary" id="flowNext">Дальше</button><button class="btn btn-ghost" id="flowReset">Сбросить</button></div></div>
-    <h2 class="h1 reveal">Услуги</h2>
-    
+    </div>
 <div class="card reveal" style="margin-bottom:12px">
   <h3>Быстрый квиз: что даст наибольшую экономию?</h3>
   <div id="quiz" data-step="0">
@@ -334,73 +383,62 @@
       </div>
     </div>
   </div>
-</div>
+</div>    
 
-<div class="grid grid-2 reveal" style="margin-bottom:12px">
-  <div class="card">
-    <h3>Голосование</h3>
-    <p class="lead" style="font-size:14px">Что мешает расти сильнее всего?</p>
-    <div class="cta">
-      <button class="btn btn-ghost poll" data-id="cashflow">Кассовые разрывы</button>
-      <button class="btn btn-ghost poll" data-id="tax">Налоги и лимиты</button>
-      <button class="btn btn-ghost poll" data-id="ops">Операционка</button>
-    </div>
-    <div id="pollResult" class="lead" style="font-size:14px; margin-top:8px; color:#a7acc2">Голосуй и смотри результаты…</div>
-  </div>
-  <div class="card">
-    <h3>Колесо призов сообщества</h3>
-    <p class="lead" style="font-size:14px">Разыгрываем консультацию/шаблоны каждую неделю среди активных.</p>
-    <div class="cta"><button class="btn btn-primary" id="spin">Крутить 🎡</button></div>
-    <div id="spinRes" class="lead" style="font-size:14px; margin-top:8px"></div>
-  </div>
-</div>
+  </section>
 
+  <section class="page" id="about">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
 
-<div class="grid grid-3 reveal" style="margin-top:12px">
-  <div class="card">
-    <h3>Статистика сообщества</h3>
-    <div class="grid grid-3" style="gap:12px">
-      <div class="card" style="text-align:center">
-        <div class="big" data-count="137" data-suffix="">0</div>
-        <div class="lead" style="font-size:12px">участников онлайн</div>
-      </div>
-      <div class="card" style="text-align:center">
-        <div class="big" data-count="42" data-suffix="">0</div>
-        <div class="lead" style="font-size:12px">ответов за неделю</div>
-      </div>
-      <div class="card" style="text-align:center">
-        <div class="big" data-count="19" data-suffix="">0</div>
-        <div class="lead" style="font-size:12px">новых гайдов</div>
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
       </div>
     </div>
-  </div>
-  <div class="card" style="display:grid; place-items:center">
-    <div style="position:relative; width:140px; height:140px">
-      <svg viewBox="0 0 120 120" width="140" height="140">
-        <circle cx="60" cy="60" r="52" stroke="rgba(255,255,255,.12)" stroke-width="12" fill="none"/>
-        <circle id="ring" cx="60" cy="60" r="52" stroke="url(#g1)" stroke-width="12" fill="none"
-          stroke-dasharray="327" stroke-dashoffset="327" stroke-linecap="round" transform="rotate(-90 60 60)"/>
-        <defs>
-          <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="var(--mint)"/>
-            <stop offset="1" stop-color="var(--primary)"/>
-          </linearGradient>
-        </defs>
-      </svg>
-      <div id="ringText" style="position:absolute; inset:0; display:grid; place-items:center; font-weight:800">0%</div>
-    </div>
-    <div class="lead" style="font-size:12px; margin-top:8px">Прогресс челленджа недели</div>
-  </div>
-  <div class="card">
-    <h3>Хайлайт недели</h3>
-    <ul class="list">
-      <li><span class="dot"></span>Самая активная тема — НДС на маркетплейсах</li>
-      <li><span class="dot"></span>Лучший ответ — @you (гайд по УСН 15%)</li>
-      <li><span class="dot"></span>Встреча в четверг, 19:00</li>
-    </ul>
-  </div>
+<div class="grid grid-2 reveal">
+  <div class="card"><h3>Путь</h3><ul class="list">
+    <li><span class="dot"></span>2014 — старт в учёте и 1С</li>
+    <li><span class="dot"></span>2018 — первые автоматизации</li>
+    <li><span class="dot"></span>2022 — ниша e‑commerce</li>
+    <li><span class="dot"></span>2024 — мини‑приложения и боты</li>
+  </ul></div>
+  <div class="card"><h3>Факты</h3><ul class="list">
+    <li><span class="dot"></span>50+ проектов</li>
+    <li><span class="dot"></span>Средняя экономия 12–30%</li>
+    <li><span class="dot"></span>Срок запуска 5–10 дней</li>
+  </ul></div>
 </div>
 
+  </section>
+
+  <section class="page" id="bonuses">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
 <div class="grid grid-3">
       <div class="card tilt reveal">
         <h3>Регистрация бизнеса</h3>
@@ -429,60 +467,38 @@
         </ul>
         <div class="cta"><a class="btn btn-primary" href="https://t.me/pravuchet_bot?start=audit" target="_blank" rel="noopener">Получить экспресс‑аудит</a></div>
       </div>
-    </div>
-  </section>
-
-  <section class="page" id="about">
-    <h2 class="h1 reveal">Обо мне</h2>
-    <p class="lead reveal">👋 Елена Бербиренкова, финансист и аналитик 1С. 10+ лет помогаю превращать бухгалтерию в инструмент роста.</p>
-  
-<div class="grid grid-2 reveal">
-  <div class="card"><h3>Путь</h3><ul class="list">
-    <li><span class="dot"></span>2014 — старт в учёте и 1С</li>
-    <li><span class="dot"></span>2018 — первые автоматизации</li>
-    <li><span class="dot"></span>2022 — ниша e‑commerce</li>
-    <li><span class="dot"></span>2024 — мини‑приложения и боты</li>
-  </ul></div>
-  <div class="card"><h3>Факты</h3><ul class="list">
-    <li><span class="dot"></span>50+ проектов</li>
-    <li><span class="dot"></span>Средняя экономия 12–30%</li>
-    <li><span class="dot"></span>Срок запуска 5–10 дней</li>
-  </ul></div>
-</div>
-
-  </section>
-
-  <section class="page" id="bonuses">
-    <h2 class="h1 reveal">Бонусы</h2>
-    <p class="lead reveal">Калькулятор, мини‑гайды, шаблоны документов — внутри бота.</p>
-    <div class="cta reveal">
-      <a class="btn btn-primary" href="https://t.me/pravuchet_bot?start=get_table" target="_blank" rel="noopener">📊 Калькулятор</a>
-      <a class="btn btn-ghost" href="#services">🧩 Больше пользы</a>
-    </div>
-  
-<div class="grid grid-2 reveal" style="margin-top:10px">
   <div class="card">
-    <h3>Мини‑гайды</h3>
-    <details open><summary>Переход между режимами</summary><p class="lead" style="font-size:14px">Чек‑лист + дедлайны, чтобы не словить штрафы.</p></details>
-    <details><summary>НДС для маркетплейсов</summary><p class="lead" style="font-size:14px">Как не терять маржу и считать ставку корректно.</p></details>
-    <details><summary>УСН 6% vs 15%</summary><p class="lead" style="font-size:14px">Когда «доходы-расходы» реально выгоднее.</p></details>
+    <h3>Колесо призов сообщества</h3>
+    <p class="lead" style="font-size:14px">Разыгрываем консультацию/шаблоны каждую неделю среди активных.</p>
+    <div class="cta"><button class="btn btn-primary" id="spin">Крутить 🎡</button></div>
+    <div id="spinRes" class="lead" style="font-size:14px; margin-top:8px"></div>
   </div>
-  <div class="card">
-    <h3>Готовые шаблоны</h3>
-    <ul class="list">
-      <li><span class="dot"></span>Бюджет ДДС (xlsx)</li>
-      <li><span class="dot"></span>Регламент закрытия месяца</li>
-      <li><span class="dot"></span>Сводный отчёт прибыли</li>
-    </ul>
-    <div class="cta"><button class="btn btn-primary toast-btn" data-msg="Отправим ссылку на шаблоны в боте.">Получить шаблоны</button></div>
-  </div>
+  <div class="grid grid-3 reveal" style="margin-top:12px">
+
+    </div>
+
 </div>
 
   </section>
 
   <section class="page" id="faq">
-    <h2 class="h1 reveal">FAQ</h2>
-    <div class="grid grid-2">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
       <div class="card tilt reveal"><h3>Сколько занимает экспресс‑аудит?</h3><p class="lead" style="font-size:14px">Обычно 1–2 дня. Быстрые правки — сразу.</p></div>
       <div class="card tilt reveal"><h3>Реально ли подобрать режим за 5 минут?</h3><p class="lead" style="font-size:14px">Да. Нужны выручка, расходы и ФОТ.</p></div>
     </div>
@@ -504,9 +520,91 @@
 
 </main>
 
+  <section class="page" id="community">
+
+    <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+ <div class="card">
+    <h3>Хайлайт недели</h3>
+    <ul class="list">
+      <li><span class="dot"></span>Самая активная тема — НДС на маркетплейсах</li>
+      <li><span class="dot"></span>Лучший ответ — @you (гайд по УСН 15%)</li>
+      <li><span class="dot"></span>Встреча в четверг, 19:00</li>
+    </ul>
+  </div>
+    </div>
+  </div>
+  <div class="card" style="display:grid; place-items:center">
+    <div style="position:relative; width:140px; height:140px">
+      <svg viewBox="0 0 120 120" width="140" height="140">
+        <circle cx="60" cy="60" r="52" stroke="rgba(255,255,255,.12)" stroke-width="12" fill="none"/>
+        <circle id="ring" cx="60" cy="60" r="52" stroke="url(#g1)" stroke-width="12" fill="none"
+          stroke-dasharray="327" stroke-dashoffset="327" stroke-linecap="round" transform="rotate(-90 60 60)"/>
+        <defs>
+          <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="var(--mint)"/>
+            <stop offset="1" stop-color="var(--primary)"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <div id="ringText" style="position:absolute; inset:0; display:grid; place-items:center; font-weight:800">0%</div>
+    </div>
+    <div class="lead" style="font-size:12px; margin-top:8px">Прогресс челленджа недели</div>
+  </div>
+</div>
+ <div class="card">
+    <h3>Статистика сообщества</h3>
+    <div class="grid grid-3" style="gap:12px">
+      <div class="card" style="text-align:center">
+        <div class="big" data-count="137" data-suffix="">0</div>
+        <div class="lead" style="font-size:12px">участников онлайн</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="big" data-count="42" data-suffix="">0</div>
+        <div class="lead" style="font-size:12px">ответов за неделю</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="big" data-count="19" data-suffix="">0</div>
+        <div class="lead" style="font-size:12px">новых гайдов</div>
+      </div>
+
+
+  </section>
+
+</main>
 
   <section class="page" id="consult">
     <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
     <div class="grid grid-2">
       <div class="card reveal">
         <h3>Выберите формат</h3>
@@ -554,7 +652,23 @@
   </section>
 
   <section class="page" id="invite">
-    <h2 class="h1 reveal">Пригласи друга</h2>
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
     <div class="grid grid-2">
       <div class="card reveal">
         <h3>Твоя реферальная ссылка</h3>
@@ -596,10 +710,15 @@
 
 <!-- Toasts & Console -->
 <div class="toasts" id="toasts"></div>
-<button class="btn btn-ghost console-toggle">🔧 Console</button>
+<button class="btn btn-ghost console-toggle">🔧</button>
 <div class="console-panel" id="consolePanel"></div>
 
 <script>
+
+// === Globals & safe helpers ===
+window.ALLOW_DRAG = (function(){ try { return matchMedia('(pointer: coarse)').matches; } catch(e){ return false; } })();
+function fmtRUR(n){ return (n||0).toLocaleString('ru-RU') + ' ₽'; }
+
 // ===== In-page console =====
 (function(){
   const panel = document.getElementById('consolePanel');
@@ -791,6 +910,31 @@ function moveBubble(){
   });
 })();
 
+
+// === Bonuses: simple spin wheel ===
+(function(){
+  const btn = document.getElementById('spin');
+  const out = document.getElementById('spinRes');
+  if(!btn || !out) return;
+  const prizes = ['🎁 Шаблон «Оффер»','📘 Чек-лист аудита','💬 +30 мин консультации','🧮 Доступ к калькулятору PRO','⭐ Приоритетный разбор'];
+  let busy = false;
+  btn.addEventListener('click', ()=>{
+    if(busy) return; busy = true; out.textContent = 'Крутим…';
+    let t = 0, total = 1800 + Math.floor(Math.random()*900);
+    const timer = setInterval(()=>{
+      t += 30;
+      if(t >= total){
+        clearInterval(timer); busy = false;
+        const win = prizes[Math.floor(Math.random()*prizes.length)];
+        out.textContent = 'Выпало: ' + win;
+        showToast('Поздравляю!', win);
+      } else {
+        out.textContent = 'Крутим…';
+      }
+    }, 30);
+  });
+})();
+
 // ===== Tilt cards =====
 (function(){
   const max = 10;
@@ -870,6 +1014,37 @@ function showToast(title, msg, timeout=3500){
 }
 document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()=>showToast('Заявка', b.dataset.msg)));
 
+
+// === Community: counters & ring progress ===
+(function(){
+  const host = document.getElementById('community'); if(!host) return;
+  host.querySelectorAll('.big[data-count]').forEach(el=>{
+    const target = parseInt(el.getAttribute('data-count'),10)||0;
+    const suffix = el.getAttribute('data-suffix')||'';
+    let cur = 0;
+    const step = Math.max(1, Math.round(target/50));
+    const tick = ()=>{
+      cur = Math.min(target, cur+step);
+      el.textContent = cur.toLocaleString('ru-RU') + suffix;
+      if(cur < target) requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  const ring = host.querySelector('#ring');
+  const txt  = host.querySelector('#ringText');
+  if(ring && txt){
+    const full = 327;
+    let val = 0, target = 62;
+    const anim = ()=>{
+      val = Math.min(target, val+2);
+      ring.style.strokeDashoffset = String(full - full*val/100);
+      txt.textContent = val + '%';
+      if(val < target) requestAnimationFrame(anim);
+    };
+    anim();
+  }
+})();
+
 // ===== KPI counters (animated) =====
 (function(){
   const k1 = document.getElementById('k1');
@@ -883,6 +1058,37 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
     if (v1<35 || v2<1500000) requestAnimationFrame(step);
   }
   step();
+})();
+
+
+// === Services tariff toggle (Месяц/Год −15%) ===
+(function(){
+  const box = document.getElementById('services'); if(!box) return;
+  const btns = box.querySelectorAll('.svcMode');
+  const cards = box.querySelectorAll('.card.price[data-base]');
+  if(!btns.length || !cards.length) return;
+  let mode = 'month';
+  function apply(){
+    cards.forEach(c=>{
+      const base = parseInt(c.getAttribute('data-base'),10) || 0;
+      const priceNode = c.querySelector('[data-price]');
+      if(!priceNode) return;
+      if(mode==='month'){
+        priceNode.textContent = fmtRUR(base);
+      }else{
+        const y = Math.round(base*12*0.85);
+        priceNode.textContent = fmtRUR(y) + ' / год (−15%)';
+      }
+    });
+    btns.forEach(b=>{
+      const is = b.getAttribute('data-mode') === mode;
+      b.classList.toggle('btn-primary', is);
+      b.classList.toggle('btn-ghost', !is);
+      b.setAttribute('aria-pressed', is ? 'true' : 'false');
+    });
+  }
+  btns.forEach(b=> b.addEventListener('click', ()=>{ mode = b.getAttribute('data-mode'); apply(); }));
+  apply();
 })();
 
 // ===== Savings widget logic =====
@@ -925,6 +1131,65 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
   document.getElementById('ctaCalc').addEventListener('click', ()=>showToast('Расчёт отправлен', 'Мы уточним детали и вернёмся с рекомендацией.'));
 })();
 
+
+
+// === Consultation: format + duration + slots ===
+(function(){
+  const scope = document.getElementById('consult'); if(!scope) return;
+  const types = scope.querySelectorAll('.consult-type');
+  let ctype = 'call';
+  types.forEach(b=> b.addEventListener('click', ()=>{
+    ctype = b.getAttribute('data-type');
+    types.forEach(x=>{
+      const on = x===b;
+      x.classList.toggle('btn-primary', on);
+      x.classList.toggle('btn-ghost', !on);
+    });
+  }));
+  const durs = scope.querySelectorAll('.dur');
+  let dmin = 30;
+  function markDur(btn){
+    durs.forEach(x=>{
+      const on = x===btn;
+      x.classList.toggle('btn-primary', on);
+      x.classList.toggle('btn-ghost', !on);
+    });
+  }
+  durs.forEach(b=> b.addEventListener('click', ()=>{ dmin = +b.getAttribute('data-min'); markDur(b); renderSlots(); }));
+  const def = scope.querySelector('.dur[data-min="30"]'); if(def){ markDur(def); }
+  const slotsEl = scope.querySelector('#slots');
+  const calendar = scope.querySelector('.calendar, #cal, .date-grid, .days');
+  function showSlots(){ if(slotsEl) slotsEl.classList.add('show'); }
+  if(calendar){
+    calendar.addEventListener('click', (e)=>{
+      const day = e.target.closest('button, .cal-cell, .day');
+      if(!day) return;
+      calendar.querySelectorAll('.selected,.sel').forEach(x=>x.classList.remove('selected','sel'));
+      day.classList.add('selected'); day.classList.add('sel');
+      showSlots(); renderSlots();
+    });
+  } else {
+    durs.forEach(b=> b.addEventListener('click', ()=>{ showSlots(); renderSlots(); }));
+  }
+
+  function renderSlots(){
+    if(!slotsEl) return;
+    slotsEl.innerHTML = '';
+    const start = 10, end = 18;
+    for(let h=start; h<=end; h++){
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost';
+      btn.textContent = String(h).padStart(2,'0') + ':00 (' + dmin + ' мин)';
+      btn.addEventListener('click', ()=>{
+        slotsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('btn-primary'));
+        btn.classList.add('btn-primary'); btn.classList.remove('btn-ghost');
+        scope._selTime = btn.textContent;
+      });
+      slotsEl.appendChild(btn);
+    }
+  }
+  /* render later after date is chosen */
+})();
 
 // ===== Consultation: calendar + slots =====
 (function(){
@@ -1044,6 +1309,37 @@ document.querySelectorAll('.copy').forEach(b=>b.addEventListener('click', async 
   };
 })();
 
+
+
+// === Invite: ref link + demo leaderboard ===
+(function(){
+  const box = document.getElementById('invite'); if(!box) return;
+  const ref = box.querySelector('#refLink');
+  const leaders = box.querySelector('#leaders');
+  if(ref){
+    const uid = (localStorage.getItem('uid') || (Date.now().toString(36)+Math.random().toString(36).slice(2,8)));
+    localStorage.setItem('uid', uid);
+    const bot = 'pravuchet_bot';
+    ref.value = 'https://t.me/'+bot+'?start=ref_'+uid;
+  }
+  function render(){
+    if(!leaders) return;
+    const me = {name:'Ты', invites: +(localStorage.getItem('ref_count')||0)};
+    const demo = [{name:'@alice',invites:7},{name:'@bob',invites:5},{name:'@mike',invites:3}];
+    const arr = [me, ...demo].sort((a,b)=>b.invites-a.invites);
+    leaders.innerHTML = arr.map((u,i)=>`<div class="lb-row"><span>${i+1}. ${u.name}</span><span class="badge-pill">${u.invites}</span></div>`).join('');
+  }
+  render();
+  const sim = box.querySelector('#simulateRef');
+  if(sim) sim.addEventListener('click', ()=>{ const n=+(localStorage.getItem('ref_count')||0)+1; localStorage.setItem('ref_count', n); render(); });
+  const copy = box.querySelector('#copyRef');
+  if(copy && ref) copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(ref.value); showToast('Скопировано','Ссылка в буфере'); }catch(e){} });
+  const share = box.querySelector('#shareRef');
+  if(share && ref) share.addEventListener('click', async ()=>{
+    if(navigator.share){ try{ await navigator.share({title:'Сообщество', text:'Присоединяйся', url:ref.value}); }catch(e){} }
+    else { try{ await navigator.clipboard.writeText(ref.value); showToast('Скопировано','Ссылка в буфере'); }catch(e){} }
+  });
+})();
 
 // ===== Community quiz =====
 (function(){
