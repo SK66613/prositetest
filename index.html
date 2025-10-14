@@ -254,6 +254,62 @@ section.page > * + *{ margin-top: var(--section-gap); }
 #consult #slots.show{ display:flex; }
 #consult .dur{ min-width:88px; text-align:center; }
 
+
+/* === v14: unified spacing & typography === */
+:root{
+  --container-pad-x: 18px;
+  --container-pad-y: 18px;
+  --section-gap: 28px;
+  --grid-gap: 12px;
+  --card-pad: 18px;
+}
+@media (min-width: 1024px){
+  :root{
+    --container-pad-x: 24px;
+    --container-pad-y: 20px;
+    --section-gap: 32px;
+    --grid-gap: 14px;
+    --card-pad: 20px;
+  }
+}
+.container{ padding: var(--container-pad-y) var(--container-pad-x) !important; }
+section.page > * + *{ margin-top: var(--section-gap) !important; }
+.grid{ gap: var(--grid-gap) !important; }
+.card{ padding: var(--card-pad) !important; }
+
+/* Typography */
+body{ font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+.brand{ font-family: 'Montserrat', sans-serif !important; }
+.h1{ font-size: clamp(24px, 3.4vw + 12px, 56px) !important; line-height: 1.15; font-weight: 800; margin: 0 0 8px; }
+
+
+/* === v15: layout normalizer (uniform paddings & width) === */
+:root{ --content-max: 1080px; }
+
+/* 1) A single content column width for everything */
+main, .container { max-width: var(--content-max); margin-inline: auto; }
+
+/* 2) Identical horizontal paddings everywhere */
+section.page { padding-left: var(--container-pad-x); padding-right: var(--container-pad-x); }
+.container{ padding-left: 0 !important; padding-right: 0 !important; } /* avoid double padding */
+
+/* 3) If секция без .container — выравниваем внутренние крупные блоки */
+section.page > .card,
+section.page > .grid,
+section.page > .section-head,
+section.page > header,
+section.page > .pillbar,
+section.page > .stepper,
+section.page > .pricing { margin-inline: 0; }
+
+/* 4) Hero/heading rows inside sections also align */
+section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
+
+/* 5) Safety: on mobile keep paddings; on desktop they already scale by var */
+@media (min-width: 1280px){
+  :root{ --content-max: 1160px; }
+}
+
 </style>
 </head>
 <body>
@@ -615,7 +671,8 @@ section.page > * + *{ margin-top: var(--section-gap); }
         </div>
         <div class="highlight-banner" id="tzInfo">Часовой пояс: …</div>
         <div class="savings">
-          
+      </div>
+    </div>          
 <div class="card" style="background:rgba(255,255,255,.04)">
   <div class="h1" style="font-size:18px;margin:0 0 8px">Календарь</div>
   <div id="cal" class="calendar"></div>
@@ -719,6 +776,26 @@ section.page > * + *{ margin-top: var(--section-gap); }
 window.ALLOW_DRAG = (function(){ try { return matchMedia('(pointer: coarse)').matches; } catch(e){ return false; } })();
 function fmtRUR(n){ return (n||0).toLocaleString('ru-RU') + ' ₽'; }
 
+
+// === v14 Router helpers ===
+function __pickInitialPage(){
+  const url = new URL(location.href);
+  let page = (url.searchParams.get('page')||'').trim();
+  if(!page && location.hash) page = location.hash.replace('#','').trim();
+  if(!page){
+    page = (url.searchParams.get('tgWebAppStartParam')||url.searchParams.get('startapp')||url.searchParams.get('start_param')||'').trim();
+  }
+  if(!page || !document.getElementById(page)) page = 'home';
+  return page;
+}
+function __updateURL(page){
+  try{
+    const u = new URL(location.href);
+    u.searchParams.set('page', page);
+    history.replaceState(null, '', u.pathname + u.search + '#' + page);
+  }catch(e){ location.hash = page; }
+}
+
 // ===== In-page console =====
 (function(){
   const panel = document.getElementById('consolePanel');
@@ -764,7 +841,7 @@ function fmtRUR(n){ return (n||0).toLocaleString('ru-RU') + ' ₽'; }
     const a = e.target.closest('[data-page]');
     if(!a) return;
     e.preventDefault();
-    __showPage(a.getAttribute('data-page'));
+    __showPage(a.getAttribute('data-page')); __updateURL(a.getAttribute('data-page'));
     history.replaceState(null,'','#'+a.getAttribute('data-page'));
   });
 
@@ -787,13 +864,13 @@ function fmtRUR(n){ return (n||0).toLocaleString('ru-RU') + ' ₽'; }
     a.addEventListener('keydown', (e)=>{
       if(e.key==='Enter' || e.key===' '){
         e.preventDefault();
-        __showPage(a.getAttribute('data-page'));
+        __showPage(a.getAttribute('data-page')); __updateURL(a.getAttribute('data-page'));
       }
     });
   });
 
-  const initial = (location.hash||'#home').replace('#','');
-  __showPage(initial||'home');
+  const initial = (window.__pickInitialPage ? __pickInitialPage() : (location.hash||'#home').replace('#','')||'home'); __showPage(initial);
+__updateURL(initial);
 })();
 
 
@@ -849,8 +926,9 @@ function moveBubble(){
     centerActive();
     console.log('page_view', {page:id});
   };
-  const initial = (location.hash||'#home').replace('#',''); show(initial||'home');
-  setTimeout(()=>{ scaleItems(); moveBubble(); }, 60);
+  const initial = (window.__pickInitialPage ? __pickInitialPage() : (location.hash||'#home').replace('#','')||'home'); show(initial);
+__updateURL(initial);
+setTimeout(()=>{ scaleItems(); moveBubble(); }, 60);
 })();
 
 // ===== Background particles (canvas) =====
@@ -1849,7 +1927,7 @@ const pages = document.querySelectorAll('section.page');
     if(!a) return;
     e.preventDefault();
     show(a.dataset.page);
-    history.replaceState(null,'','#'+a.dataset.page);
+    __updateURL(a.dataset.page);
   });
 
   let isDown=false, sx=0, sl=0;
@@ -1868,7 +1946,7 @@ const pages = document.querySelectorAll('section.page');
   links.forEach(a=>{
     a.setAttribute('tabindex','0');
     a.addEventListener('keydown', (e)=>{
-      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); show(a.dataset.page); history.replaceState(null,'','#'+a.dataset.page); }
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); show(a.dataset.page); __updateURL(a.dataset.page); }
     });
   });
 
