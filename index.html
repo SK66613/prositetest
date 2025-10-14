@@ -11,7 +11,8 @@
       --primary:#7b5bff; --mint:#3de0c5; --blue:#5b8cff;
       --card:rgba(255,255,255,.05); --stroke:rgba(255,255,255,.10);
       --toast:#0f1221;
-    }
+    
+  --nav-active-pad-extra: 6px;}
     *{box-sizing:border-box}
     body{margin:0;color:var(--text);font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);overflow-x:hidden}
     .container{max-width:1080px;margin:0 auto;padding:16px 16px 24px}
@@ -206,6 +207,16 @@
 .badge-pill{display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.04); font-weight:700; font-size:12px}
 .lb-row{display:flex;justify-content:space-between;align-items:center;margin:6px 0}
 .q-badge{display:inline-flex; gap:6px; align-items:center; padding:6px 8px; border-radius:10px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.04); font-size:12px}
+
+
+/* Safe minimal "grow" effect for active tab without JS changes */
+#spa-nav .btn { /* declare a fallback for horizontal padding if none defined as CSS var */
+  --btn-pad-x: 12px; /* only used by the rule below if the existing CSS doesn't define it */
+}
+#spa-nav .btn.active{
+  padding-left:  calc(var(--btn-pad-x, 12px) + var(--nav-active-pad-extra));
+  padding-right: calc(var(--btn-pad-x, 12px) + var(--nav-active-pad-extra));
+}
 
 </style>
 </head>
