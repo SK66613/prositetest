@@ -2475,5 +2475,102 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
 
 </script>
 
+
+<script>
+// v24 — Referral: +100 points per invited friend
+(function(){
+  const u = new URL(location.href);
+  const start = u.searchParams.get('start') || u.searchParams.get('tgWebAppStartParam') || u.searchParams.get('start_param');
+  if(!start) return;
+  const m = String(start).match(/^ref_(.+)$/);
+  if(!m) return;
+  const inviter = m[1];
+  const KEY = 'ref_paid_' + inviter;
+  // Pay once per device for this inviter
+  if(localStorage.getItem(KEY)) return;
+  try{
+    const cur = +(localStorage.getItem('stat_points_'+inviter) || 0);
+    localStorage.setItem('stat_points_'+inviter, String(cur + 100));
+    // if this device belongs to inviter (unlikely) — also raise global points
+    if((localStorage.getItem('uid')||'') === inviter){
+      localStorage.setItem('stat_points', String((+localStorage.getItem('stat_points')||0) + 100));
+    }
+    // Store who invited current user
+    localStorage.setItem('invited_by', inviter);
+    localStorage.setItem(KEY, '1');
+  }catch(e){}
+})();
+
+// v24 — Invite section: generate link and simulate +1 adds +100 points
+(function(){
+  const box = document.getElementById('invite'); if(!box) return;
+  function uid(){ let v = localStorage.getItem('uid'); if(!v){ v = Date.now().toString(36)+Math.random().toString(36).slice(2,8); localStorage.setItem('uid', v);} return v; }
+  const bot = (window.APP_CONFIG && window.APP_CONFIG.TG_BOT_USERNAME) || 'serge_kamensky_bot';
+  const link = `https://t.me/${bot}?start=ref_${uid()}`;
+  const inp = box.querySelector('#refLink'); if(inp) inp.value = link;
+  const copy = box.querySelector('#copyRef'); const share = box.querySelector('#shareRef'); const sim = box.querySelector('#simulateRef');
+  copy && copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(link); showToast && showToast('Скопировано', 'Ссылка в буфере'); }catch(e){} });
+  share && share.addEventListener('click', async ()=>{ try{ if(navigator.share) await navigator.share({title:'Сообщество', url: link}); else await navigator.clipboard.writeText(link); }catch(e){} });
+  sim && sim.addEventListener('click', ()=>{ 
+    const cur = +localStorage.getItem('stat_points') || 0;
+    localStorage.setItem('stat_points', String(cur + 100));
+    try{ showToast && showToast('+100 очков', 'Зачисление за приглашение'); }catch(e){}
+    try{ if(window.confetti) confetti({particleCount:140, spread:70}); }catch(e){}
+  });
+})();
+
+// v24 — Profile: show real Telegram name reliably
+(function(){
+  const btn = document.querySelector('.console-toggle');
+  const panel = document.getElementById('consolePanel');
+  if(!btn || !panel) return;
+  function initials(name){ const p=(name||'').trim().split(/\s+/); const a=(p[0]||'').charAt(0), b=(p[1]||'').charAt(0); return (a+(b||'')).toUpperCase()||'☺'; }
+  function tgUser(){ try{ return Telegram?.WebApp?.initDataUnsafe?.user || null } catch(e){ return null } }
+  function render(){
+    const user = tgUser();
+    const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Гость';
+    const uname = user?.username ? '@'+user.username : '—';
+    const pts = +localStorage.getItem('stat_points') || 0;
+    const prize = (JSON.parse(localStorage.getItem('last_prizes')||'[]')||[]).slice(-1)[0] || '—';
+    const booking = localStorage.getItem('last_booking') || 'Нет';
+    const bot = (window.APP_CONFIG && window.APP_CONFIG.TG_BOT_USERNAME) || 'serge_kamensky_bot';
+    panel.innerHTML = `
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
+        <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--primary));display:grid;place-items:center;font-weight:800">${initials(name)}</div>
+        <div><div style="font-weight:800">${name}</div><div style="opacity:.7;font-size:12px">${uname}</div></div>
+      </div>
+      <div class="grid" style="gap:8px">
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Очки</div><div class="big">${pts}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Последний приз</div><div class="big" style="font-size:14px">${prize}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Запись</div><div class="big" style="font-size:14px">${booking}</div></div>
+      </div>
+      <div class="cta" style="margin-top:10px">
+        <a class="btn btn-primary" data-open-bot href="https://t.me/${bot}">Открыть бота</a>
+        <button class="btn btn-ghost" id="profClose">Закрыть</button>
+      </div>
+    `;
+  }
+  function openPanel(){
+    render();
+    panel.style.display='block'; panel.style.maxHeight='70vh'; panel.style.width='min(420px,92vw)';
+    panel.querySelector('#profClose')?.addEventListener('click', ()=> panel.style.display='none');
+    // refresh a few times in case Telegram user arrives later
+    let tries = 0; const t = setInterval(()=>{ const u = tgUser(); if(u || tries++>20){ clearInterval(t); if(u) render(); }}, 150);
+  }
+  btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); if(panel.style.display==='block'){ panel.style.display='none'; } else { openPanel(); } }, {passive:false});
+})();
+
+// v24 — Global haptics + confetti coverage
+(function(){
+  function vibr(){ try{ Telegram.WebApp.HapticFeedback.impactOccurred('light'); }catch(e){ navigator.vibrate && navigator.vibrate(25); } }
+  function conf(){ try{ if(window.confetti) confetti({particleCount:120, spread:70}); }catch(e){} }
+  const sel = 'button,.btn,[role="button"],a.btn';
+  document.addEventListener('click', (e)=>{ if(e.target.closest(sel)){ vibr(); } }, {passive:true});
+  document.addEventListener('touchstart', (e)=>{ if(e.target.closest(sel)){ vibr(); } }, {passive:true});
+  // auto-confetti for elements with .confetti or data-confetti
+  document.addEventListener('click', (e)=>{ const el=e.target.closest('.confetti,[data-confetti]'); if(el){ conf(); } }, {passive:true});
+})();
+</script>
+
 </body>
 </html>
