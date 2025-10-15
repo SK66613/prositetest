@@ -325,6 +325,17 @@ section.page .hero, section.page .lead, section.page .h1 { margin-inline: 0; }
 }
 @media(max-width:480px){ input, select, textarea{ font-size:16px !important; line-height:1.3 } }
 
+
+/* v21: mobile tap comfort, anti zoom & safer tilt */
+html, body{ -webkit-text-size-adjust: 100%; }
+.btn{ touch-action: manipulation; } /* removes 300ms delay & dbl-tap zoom on iOS */
+@media (max-width: 480px){
+  .tilt{ transform: none !important; } /* avoid Safari repaint glitches on iOS */
+}
+/* profile panel on top of everything */
+.console-panel{ z-index: 3000; }
+.console-toggle{ z-index: 3001; }
+
 </style>
 </head>
 <body>
@@ -2358,6 +2369,113 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
   toggle.addEventListener('click', ()=>{
     if (panel.style.display==='block'){ panel.style.display='none'; }
     else { renderProfile(); }
+  });
+})();
+
+</script>
+
+
+<script>
+// v21 — iOS flag & double-tap zoom suppressor
+(function(){
+  var ua = navigator.userAgent || navigator.vendor || '';
+  var isiOS = /iPad|iPhone|iPod/.test(ua);
+  if(isiOS) document.documentElement.classList.add('ios');
+  // naive double-tap suppressor for interactive elements
+  var last = 0;
+  document.addEventListener('touchend', function(e){
+    const target = e.target.closest('button, .btn, a, [role="button"]');
+    if(!target) return;
+    var now = Date.now();
+    if(now - last < 350){ e.preventDefault(); }
+    last = now;
+  }, {passive:false});
+})();
+
+// v21 — global haptics also on touchstart
+(function(){
+  function vibr(level){ try{ Telegram.WebApp.HapticFeedback.impactOccurred(level||'light'); }catch(e){ navigator.vibrate && navigator.vibrate(25); } }
+  document.addEventListener('click',  function(e){ if(e.target.closest('.btn,button')) vibr('light'); }, {passive:true});
+  document.addEventListener('touchstart', function(e){ if(e.target.closest('.btn,button')) vibr('light'); }, {passive:true});
+})();
+
+// v21 — Bonuses: guard all CTA buttons to avoid layout break + send events
+(function(){
+  const box = document.getElementById('bonuses'); if(!box) return;
+  // normalize external links to open in bot page, but don't navigate inside WebApp
+  box.querySelectorAll('a.btn').forEach(a=>{
+    a.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      try{ if(window.confetti) confetti({particleCount:120, spread:70}); }catch(_){}
+      try{ showToast && showToast('Откроем в боте', 'Событие отправлено'); }catch(_){}
+      const payload = { type:'bonus_btn', href:a.getAttribute('href'), ts:new Date().toISOString(), uid: localStorage.getItem('uid')||'' };
+      try{ Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(_){}
+    }, {passive:false});
+  });
+  // existing toast-btn (регистрация и т.п.)
+  box.querySelectorAll('.toast-btn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      try{ if(window.confetti) confetti({particleCount:120, spread:70}); }catch(_){}
+      try{ showToast && showToast('Готово', btn.getAttribute('data-msg')||'Отправлено'); }catch(_){}
+      try{
+        const payload = { type:'register_business', ts:new Date().toISOString(), uid: localStorage.getItem('uid')||'' };
+        Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload));
+      }catch(_){}
+      // force repaint to avoid Safari layer artifacts
+      document.body.style.webkitTransform='translateZ(0)'; setTimeout(()=>{ document.body.style.webkitTransform=''; }, 60);
+    }, {passive:false});
+  });
+})();
+
+// v21 — Profile instead of console (ensure open on tap)
+(function(){
+  const btn = document.querySelector('.console-toggle');
+  const panel = document.getElementById('consolePanel');
+  if(!btn || !panel) return;
+
+  function initials(name){
+    const p=(name||'').trim().split(/\s+/);
+    return ( (p[0]||'').charAt(0) + (p[1]||'').charAt(0) || (p[0]||'?').charAt(0) ).toUpperCase();
+  }
+  function render(){
+    let user=null; try{ user = Telegram?.WebApp?.initDataUnsafe?.user || null; }catch(_){}
+    const uname = user?.username ? '@'+user.username : '—';
+    const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Гость';
+    const pts = +localStorage.getItem('stat_points') || 0;
+    const prize = (JSON.parse(localStorage.getItem('last_prizes')||'[]')||[]).slice(-1)[0] || '—';
+    const booking = localStorage.getItem('last_booking') || 'Нет';
+
+    panel.innerHTML = `
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
+        <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--primary));display:grid;place-items:center;font-weight:800">${initials(name)}</div>
+        <div><div style="font-weight:800">${name}</div><div style="opacity:.7;font-size:12px">${uname}</div></div>
+      </div>
+      <div class="grid" style="gap:8px">
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Очки</div><div class="big">${pts}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Последний приз</div><div class="big" style="font-size:14px">${prize}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Запись</div><div class="big" style="font-size:14px">${booking}</div></div>
+      </div>
+      <div class="cta" style="margin-top:10px">
+        <a class="btn btn-primary" href="https://t.me/${(window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot'}" target="_blank" rel="noopener">Открыть бота</a>
+        <button class="btn btn-ghost" id="profClose">Закрыть</button>
+      </div>
+    `;
+  }
+
+  function openPanel(){
+    render();
+    panel.style.display='block';
+    panel.style.maxHeight='70vh';
+    panel.style.width='min(420px,92vw)';
+  }
+  function closePanel(){ panel.style.display='none'; }
+
+  btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); 
+    if(panel.style.display==='block') closePanel(); else openPanel();
+  }, {passive:false});
+  panel.addEventListener('click', (e)=>{
+    if(e.target.id==='profClose') { closePanel(); }
   });
 })();
 
