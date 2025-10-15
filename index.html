@@ -2204,5 +2204,164 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
 })();
 </script>
 
+
+<script>
+// v20 — Bonuses: "Оформить регистрацию" safe handler (confetti + toast + sendData)
+(function(){
+  const box = document.getElementById('bonuses'); if(!box) return;
+  box.querySelectorAll('.toast-btn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      // confetti
+      try{ if(window.confetti) confetti({particleCount:120, spread:70}); }catch(_){}
+      // toast
+      const msg = btn.getAttribute('data-msg') || 'Заявка получена';
+      try{ window.showToast && showToast('Готово', msg); }catch(_){}
+      // send to bot + GAS if configured
+      try{
+        const payload = { type:'register_business', ts:new Date().toISOString(), uid: (localStorage.getItem('uid')||'') };
+        Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload));
+      }catch(_){}
+      // update local stats
+      try{ localStorage.setItem('stat_points', String((+localStorage.getItem('stat_points')||0)+5)); }catch(_){}
+    }, {once:false});
+  });
+})();
+
+// v20 — Main flow: stepper with redirect to #consult on last step
+(function(){
+  const card = document.getElementById('home'); if(!card) return;
+  const flow = card.querySelector('#flow'); if(!flow) return;
+  const btnNext = card.querySelector('#flowNext'); const btnReset = card.querySelector('#flowReset');
+  const steps = Array.from(flow.querySelectorAll('.badge'));
+  let i = 0;
+  function render(){
+    steps.forEach((s,idx)=>{
+      s.style.opacity = idx<=i ? 1 : .45;
+      s.style.filter = idx<=i ? 'none' : 'grayscale(.3)';
+    });
+    if(i >= steps.length-1){ btnNext.textContent = 'Перейти к консультации'; }
+    else { btnNext.textContent = 'Дальше'; }
+  }
+  btnNext?.addEventListener('click', ()=>{
+    if(i < steps.length-1){ i++; render(); }
+    else{
+      try{ window.showToast && showToast('Готово', 'Открыл раздел «Консультация»'); }catch(_){}
+      if (typeof __showPage === 'function'){ __showPage('consult'); }
+      else if (typeof show === 'function'){ show('consult'); }
+      try{
+        const u = new URL(location.href);
+        u.searchParams.set('page','consult'); history.replaceState(null,'', u.pathname+u.search+'#consult');
+      }catch(_){ location.hash = 'consult'; }
+    }
+  });
+  btnReset?.addEventListener('click', ()=>{ i = 0; render(); });
+  render();
+})();
+
+// v20 — Wheel: 24h cooldown with countdown
+(function(){
+  const section = document.getElementById('bonuses'); if(!section) return;
+  const oldBtn = section.querySelector('#spin'); const out = section.querySelector('#spinRes');
+  if(!oldBtn || !out) return;
+  const btn = oldBtn.cloneNode(true); oldBtn.replaceWith(btn);
+
+  const uid = (localStorage.getItem('uid')|| (Date.now().toString(36)+Math.random().toString(36).slice(2,8))); localStorage.setItem('uid', uid);
+  const KEY = 'spin_next_at_' + uid;
+  const COOLDOWN = 24*60*60*1000;
+  const prizes = ['🎁 Шаблон «Оффер»','📘 Чек-лист аудита','💬 +30 мин консультации','🧮 Доступ к калькулятору PRO','⭐ Приоритетный разбор'];
+
+  function h(){ try{ Telegram.WebApp.HapticFeedback.impactOccurred('light'); }catch(e){ navigator.vibrate?.(25); } }
+  function announce(txt){ try{ showToast && showToast('Поздравляю!', txt); }catch(e){} }
+
+  let timer;
+  function apply(){
+    const left = (parseInt(localStorage.getItem(KEY)||'0',10) - Date.now());
+    if(left>0){
+      btn.disabled = true; btn.classList.add('btn-ghost'); btn.classList.remove('btn-primary');
+      const tick = ()=>{
+        const l = parseInt(localStorage.getItem(KEY)||'0',10) - Date.now();
+        if(l<=0){ clearInterval(timer); btn.disabled=false; btn.classList.remove('btn-ghost'); btn.classList.add('btn-primary'); btn.textContent='Крутить 🎡'; return; }
+        const s=Math.floor(l/1000), hhh=Math.floor(s/3600), mmm=Math.floor((s%3600)/60), ss=s%60;
+        btn.textContent = 'Крутить через ' + (hhh? hhh+'ч ':'') + (mmm? mmm+'м ':'') + ss+'с';
+      };
+      clearInterval(timer); timer = setInterval(tick,1000); tick(); return true;
+    } else {
+      btn.disabled=false; btn.classList.remove('btn-ghost'); btn.classList.add('btn-primary'); btn.textContent='Крутить 🎡'; return false;
+    }
+  }
+
+  let spinning=false;
+  btn.addEventListener('click', ()=>{
+    if(spinning) return;
+    if(apply()) return;
+    spinning=true; out.textContent='Крутим…'; h();
+    const total = 1800 + Math.floor(Math.random()*900);
+    const t0 = performance.now();
+    const step = (t)=>{
+      if(t - t0 >= total){
+        const win = prizes[Math.floor(Math.random()*prizes.length)];
+        out.textContent = 'Выпало: ' + win;
+        announce(win);
+        // stats
+        try{
+          const arr = JSON.parse(localStorage.getItem('last_prizes')||'[]'); arr.push(win);
+          localStorage.setItem('last_prizes', JSON.stringify(arr.slice(-10)));
+          localStorage.setItem('stat_prizes', String(+(localStorage.getItem('stat_prizes')||0)+1));
+          localStorage.setItem('stat_points', String(+(localStorage.getItem('stat_points')||0)+10));
+        }catch(_){}
+        localStorage.setItem(KEY, String(Date.now()+COOLDOWN));
+        spinning=false; apply();
+        return;
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+  apply();
+})();
+
+// v20 — Profile panel instead of console (avatar, name, points, last prize, last booking demo)
+(function(){
+  const toggle = document.querySelector('.console-toggle'); const panel = document.getElementById('consolePanel');
+  if(!toggle || !panel) return;
+  function initials(name){
+    const parts = (name||'').trim().split(/\s+/); const a=(parts[0]||'').charAt(0), b=(parts[1]||'').charAt(0);
+    return (a+b||a||'?').toUpperCase();
+  }
+  function renderProfile(){
+    let user=null; try{ user = Telegram?.WebApp?.initDataUnsafe?.user || null; }catch(_){}
+    const uname = user?.username ? '@'+user.username : (user?.first_name||'Гость');
+    const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Гость';
+    const pts = +localStorage.getItem('stat_points') || 0;
+    const prize = (JSON.parse(localStorage.getItem('last_prizes')||'[]')||[]).slice(-1)[0] || '—';
+    const lastBooking = localStorage.getItem('last_booking') || 'Нет';
+    panel.innerHTML = `
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
+        <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--primary));display:grid;place-items:center;font-weight:800">${initials(name)}</div>
+        <div><div style="font-weight:800">${name}</div><div style="opacity:.7;font-size:12px">${uname}</div></div>
+      </div>
+      <div class="grid" style="gap:8px">
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Очки</div><div class="big">${pts}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Последний приз</div><div class="big" style="font-size:14px">${prize}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Запись</div><div class="big" style="font-size:14px">${lastBooking}</div></div>
+      </div>
+      <div class="cta" style="margin-top:10px">
+        <a class="btn btn-primary" href="https://t.me/${(window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot'}" target="_blank" rel="noopener">Открыть бота</a>
+        <button class="btn btn-ghost" id="profClose">Закрыть</button>
+      </div>
+    `;
+    panel.style.display='block';
+    panel.style.maxHeight='70vh'; panel.style.width='min(420px,92vw)';
+    panel.querySelector('#profClose')?.addEventListener('click', ()=> panel.style.display='none');
+  }
+  toggle.addEventListener('click', ()=>{
+    if (panel.style.display==='block'){ panel.style.display='none'; }
+    else { renderProfile(); }
+  });
+})();
+
+</script>
+
 </body>
 </html>
