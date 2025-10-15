@@ -2038,7 +2038,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: '',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbxqbMhjJECl5PlMNd9rcfQgqMVsV1XlHBevD-PrXCOCWC7Qf-KxwlrVuFEuMeMI-nlwug/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -2807,6 +2807,37 @@ window.__domLog = function(){};
   function close(){ panel.style.display='none'; }
   btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); (panel.style.display==='block') ? close() : open(); }, {passive:false});
   panel.addEventListener('click', (e)=>{ if(e.target.id==='profClose'){ close(); }}, {passive:true});
+})();
+</script>
+
+
+<script>
+// GAS bootstrap: fetch profile by tg_init on load
+(function(){
+  const C = window.APP_CONFIG||{};
+  if(!C.GAS_WEBHOOK) return;
+  function tgInit(){ try{ return Telegram && Telegram.WebApp && Telegram.WebApp.initData || ''; }catch(e){ return '' } }
+  async function bootstrap(){
+    try{
+      const url = C.GAS_WEBHOOK + '?mode=bootstrap&tg_init=' + encodeURIComponent(tgInit());
+      const res = await fetch(url, {method:'GET', headers:{'Cache-Control':'no-store'}});
+      const data = await res.json().catch(()=>null);
+      if(!data || !data.ok) return;
+      // Cache essentials for UI
+      try{
+        const p = data.profile||{};
+        localStorage.setItem('stat_points', String(p.points||0));
+        localStorage.setItem('last_prizes', JSON.stringify(p.prizes||[]));
+        if(p.spin_next_at) localStorage.setItem('spin_next_at', p.spin_next_at);
+        if(p.last_booking) localStorage.setItem('last_booking', p.last_booking);
+      }catch(_){}
+      // notify UI
+      try{ window.showToast && showToast('Профиль обновлён', 'Данные подтянуты с сервера'); }catch(_){}
+    }catch(e){ /*silent*/ }
+  }
+  // start when WebApp is ready
+  if (document.readyState === 'complete' || document.readyState === 'interactive') bootstrap();
+  else document.addEventListener('DOMContentLoaded', bootstrap);
 })();
 </script>
 
