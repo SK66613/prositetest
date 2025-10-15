@@ -341,6 +341,22 @@ html, body{ -webkit-text-size-adjust: 100%; }
 .console-log, .console-panel pre, .console-panel .line, .console-panel .time, .console-panel .event { display:none !important; }
 .console-panel { font: inherit; color: inherit; }
 /* keep the panel container for profile usage */
+
+/* v25: hide any legacy log UI completely; keep panel for profile */
+.console-panel pre,.console-panel .line,.console-panel .time,.console-panel .event,.console-log{display:none!important}
+/* z-index to ensure profile over content */
+.console-panel{z-index:3000}
+.console-toggle{z-index:3001}
+/* mobile: prevent dbl-tap zoom + flicker */
+.btn,button{touch-action:manipulation}
+html,body{-webkit-text-size-adjust:100%}
+@media(max-width:480px){.tilt{transform:none!important}}
+
+
+/* v27 ensure panel on top */
+.console-panel{z-index:3000}
+.console-toggle,.fab-console{z-index:3001}
+
 </style>
 </head>
 <body>
@@ -2477,7 +2493,57 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
 
 
 <script>
-// v24 — Referral: +100 points per invited friend
+/* ================= v25 SAFE PATCH ================= */
+
+/* Config guard */
+window.APP_CONFIG = Object.assign({
+  TG_BOT_USERNAME: 'serge_kamensky_bot',
+  GAS_WEBHOOK: '',
+  API_KEY: '',
+  USE_TG_SIGNATURE: true
+}, window.APP_CONFIG||{});
+
+/* Helpers */
+function __uid(){ let u=localStorage.getItem('uid'); if(!u){u=Date.now().toString(36)+Math.random().toString(36).slice(2,8); localStorage.setItem('uid',u);} return u; }
+function __tgUser(){ try{ return Telegram?.WebApp?.initDataUnsafe?.user||null }catch(e){ return null } }
+function __tgInit(){ try{ return Telegram?.WebApp?.initData||null }catch(e){ return null } }
+function __haptic(level){ try{ Telegram.WebApp.HapticFeedback.impactOccurred(level||'light'); }catch(e){ navigator.vibrate && navigator.vibrate(25); } }
+function __conf(){ try{ if(window.confetti) confetti({particleCount:140, spread:70}); }catch(e){} }
+async function __postGAS(payload){
+  const C = window.APP_CONFIG||{}; if(!C.GAS_WEBHOOK) return {ok:false, error:'no_webhook'};
+  const body = Object.assign({}, payload);
+  if (C.USE_TG_SIGNATURE && __tgInit()) body.tg_init = __tgInit();
+  if (!__tgInit() && C.API_KEY) body.key = C.API_KEY;
+  try{ const r = await fetch(C.GAS_WEBHOOK, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+       return await r.json().catch(()=>({ok:true}));
+  }catch(e){ return {ok:false, error:String(e)} }
+}
+
+/* 0) Kill any in-page console hooks that might print into panel */
+window.__domLog = function(){};
+
+/* 1) Global haptics + confetti hooks */
+(function(){
+  const sel='button,.btn,[role="button"],a.btn';
+  document.addEventListener('click',e=>{ if(e.target.closest(sel)) __haptic('light'); }, {passive:true});
+  document.addEventListener('touchstart',e=>{ if(e.target.closest(sel)) __haptic('light'); }, {passive:true});
+  // auto-confetti on elements with .confetti or data-confetti
+  document.addEventListener('click',e=>{ const t=e.target.closest('.confetti,[data-confetti]'); if(t) __conf(); }, {passive:true});
+})();
+
+/* 2) Deeplinks to the configured bot (open in Telegram) */
+(function(){
+  const bot = (window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot';
+  document.addEventListener('click', (e)=>{
+    const a = e.target.closest('a[data-open-bot], a[href^="https://t.me/"], a[href^="t.me/"]');
+    if(!a) return;
+    e.preventDefault(); e.stopPropagation();
+    const href = a.getAttribute('href')||('https://t.me/'+bot);
+    try{ Telegram.WebApp.openTelegramLink(href); }catch(_){ window.open(href,'_blank'); }
+  }, {passive:false});
+})();
+
+/* 3) Referral points: +100 per invited friend */
 (function(){
   const u = new URL(location.href);
   const start = u.searchParams.get('start') || u.searchParams.get('tgWebAppStartParam') || u.searchParams.get('start_param');
@@ -2485,55 +2551,240 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
   const m = String(start).match(/^ref_(.+)$/);
   if(!m) return;
   const inviter = m[1];
-  const KEY = 'ref_paid_' + inviter;
-  // Pay once per device for this inviter
-  if(localStorage.getItem(KEY)) return;
+  const KEY = 'ref_paid_'+inviter;
+  if(localStorage.getItem(KEY)) return; // one-time per device for this inviter
   try{
     const cur = +(localStorage.getItem('stat_points_'+inviter) || 0);
     localStorage.setItem('stat_points_'+inviter, String(cur + 100));
-    // if this device belongs to inviter (unlikely) — also raise global points
-    if((localStorage.getItem('uid')||'') === inviter){
-      localStorage.setItem('stat_points', String((+localStorage.getItem('stat_points')||0) + 100));
+    if((localStorage.getItem('uid')||'') === inviter){ // inviter on same device
+      localStorage.setItem('stat_points', String((+localStorage.getItem('stat_points')||0)+100));
     }
-    // Store who invited current user
     localStorage.setItem('invited_by', inviter);
     localStorage.setItem(KEY, '1');
-  }catch(e){}
+    // send event (optional)
+    const payload = {type:'ref_join', ts:new Date().toISOString(), inviter, uid:__uid(), tg_user:__tgUser()};
+    try{ Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(_){}
+    __postGAS(payload);
+  }catch(_){}
 })();
 
-// v24 — Invite section: generate link and simulate +1 adds +100 points
+/* 4) Invite page: generate link + demo add +100 */
 (function(){
-  const box = document.getElementById('invite'); if(!box) return;
-  function uid(){ let v = localStorage.getItem('uid'); if(!v){ v = Date.now().toString(36)+Math.random().toString(36).slice(2,8); localStorage.setItem('uid', v);} return v; }
-  const bot = (window.APP_CONFIG && window.APP_CONFIG.TG_BOT_USERNAME) || 'serge_kamensky_bot';
-  const link = `https://t.me/${bot}?start=ref_${uid()}`;
-  const inp = box.querySelector('#refLink'); if(inp) inp.value = link;
-  const copy = box.querySelector('#copyRef'); const share = box.querySelector('#shareRef'); const sim = box.querySelector('#simulateRef');
-  copy && copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(link); showToast && showToast('Скопировано', 'Ссылка в буфере'); }catch(e){} });
-  share && share.addEventListener('click', async ()=>{ try{ if(navigator.share) await navigator.share({title:'Сообщество', url: link}); else await navigator.clipboard.writeText(link); }catch(e){} });
-  sim && sim.addEventListener('click', ()=>{ 
-    const cur = +localStorage.getItem('stat_points') || 0;
-    localStorage.setItem('stat_points', String(cur + 100));
-    try{ showToast && showToast('+100 очков', 'Зачисление за приглашение'); }catch(e){}
-    try{ if(window.confetti) confetti({particleCount:140, spread:70}); }catch(e){}
+  const box=document.getElementById('invite'); if(!box) return;
+  const bot=(window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot';
+  const link=`https://t.me/${bot}?start=ref_${__uid()}`;
+  const inp=box.querySelector('#refLink'); if(inp) inp.value=link;
+  const copy=box.querySelector('#copyRef'), share=box.querySelector('#shareRef'), sim=box.querySelector('#simulateRef');
+  copy && copy.addEventListener('click', async()=>{ try{ await navigator.clipboard.writeText(link); showToast && showToast('Скопировано','Ссылка в буфере'); }catch(_){}});
+  share && share.addEventListener('click', async()=>{ try{ if(navigator.share) await navigator.share({title:'Сообщество',url:link}); else await navigator.clipboard.writeText(link); showToast && showToast('Готово','Ссылка скопирована'); }catch(_){}});
+  sim && sim.addEventListener('click', ()=>{ const cur=+localStorage.getItem('stat_points')||0; localStorage.setItem('stat_points', String(cur+100)); __conf(); try{showToast('+100 очков','Зачисление за приглашение');}catch(_){} });
+})();
+
+/* 5) Profile panel (вместо консоли) — надёжный рендер имени */
+(function(){
+  const btn=document.querySelector('.console-toggle'); const panel=document.getElementById('consolePanel');
+  if(!btn||!panel) return;
+  function initials(name){ const p=(name||'').trim().split(/\s+/); return ((p[0]||'').charAt(0)+(p[1]||'').charAt(0)||'☺').toUpperCase(); }
+  function render(){
+    const u=__tgUser(); const name=[u?.first_name,u?.last_name].filter(Boolean).join(' ')||'Гость'; const uname=u?.username?('@'+u.username):'—';
+    const pts=+localStorage.getItem('stat_points')||0;
+    const prize=(JSON.parse(localStorage.getItem('last_prizes')||'[]')||[]).slice(-1)[0]||'—';
+    const booking=localStorage.getItem('last_booking')||'Нет';
+    const bot=(window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot';
+    panel.innerHTML=`
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+        <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--primary));display:grid;place-items:center;font-weight:800">${initials(name)}</div>
+        <div><div style="font-weight:800">${name}</div><div style="opacity:.7;font-size:12px">${uname}</div></div>
+      </div>
+      <div class="grid" style="gap:8px">
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Очки</div><div class="big">${pts}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Последний приз</div><div class="big" style="font-size:14px">${prize}</div></div>
+        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Запись</div><div class="big" style="font-size:14px">${booking}</div></div>
+      </div>
+      <div class="cta" style="margin-top:10px">
+        <a class="btn btn-primary" data-open-bot href="https://t.me/${bot}">Открыть бота</a>
+        <button class="btn btn-ghost" id="profClose">Закрыть</button>
+      </div>`;
+    panel.style.display='block'; panel.style.maxHeight='70vh'; panel.style.width='min(420px,92vw)';
+    panel.querySelector('#profClose')?.addEventListener('click', ()=> panel.style.display='none');
+  }
+  btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); if(panel.style.display==='block') panel.style.display='none'; else { render(); let tries=0; const t=setInterval(()=>{ const u=__tgUser(); if(u||tries++>20){clearInterval(t); if(u) render();}},150); } }, {passive:false});
+})();
+
+/* 6) Bonuses CTA safe-handlers: конфетти + событие в бота, без ломки слоя */
+(function(){
+  const box=document.getElementById('bonuses'); if(!box) return;
+  // links
+  box.querySelectorAll('a.btn').forEach(a=>{
+    a.addEventListener('click',(e)=>{
+      e.preventDefault(); e.stopPropagation();
+      __conf(); __haptic('light');
+      const payload={type:'bonus_btn', href:a.getAttribute('href'), ts:new Date().toISOString(), uid:__uid()};
+      try{ Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(_){}
+      document.body.style.webkitTransform='translateZ(0)'; setTimeout(()=>document.body.style.webkitTransform='',60);
+    }, {passive:false});
+  });
+  // toast buttons (регистрация)
+  box.querySelectorAll('.toast-btn').forEach(btn=>{
+    btn.addEventListener('click',(e)=>{
+      e.preventDefault(); e.stopPropagation();
+      __conf(); __haptic('light');
+      try{ showToast && showToast('Готово', btn.getAttribute('data-msg')||'Отправлено'); }catch(_){}
+      const payload={type:'register_business', ts:new Date().toISOString(), uid:__uid()};
+      try{ Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(_){}
+      __postGAS(payload);
+      document.body.style.webkitTransform='translateZ(0)'; setTimeout(()=>document.body.style.webkitTransform='',60);
+    }, {passive:false});
   });
 })();
 
-// v24 — Profile: show real Telegram name reliably
+/* 7) "Как мы работаем" — переход в консультацию на последнем шаге */
 (function(){
-  const btn = document.querySelector('.console-toggle');
+  const home=document.getElementById('home'); if(!home) return;
+  const flow=home.querySelector('#flow'); const next=home.querySelector('#flowNext'); const reset=home.querySelector('#flowReset');
+  if(!flow || !next) return;
+  const steps=[...flow.querySelectorAll('.badge')]; let i=0;
+  function paint(){ steps.forEach((s,idx)=>{ s.style.opacity=idx<=i?1:.45; s.style.filter=idx<=i?'none':'grayscale(.3)'; }); next.textContent = i>=steps.length-1 ? 'Перейти к консультации' : 'Дальше'; }
+  next.addEventListener('click', ()=>{ if(i<steps.length-1){ i++; paint(); } else { try{ showToast && showToast('Открываю','Раздел «Консультация»'); }catch(_){}
+    if (typeof __showPage==='function') __showPage('consult'); else if (typeof show==='function') show('consult');
+    try{ const u=new URL(location.href); u.searchParams.set('page','consult'); history.replaceState(null,'', u.pathname+u.search+'#consult'); }catch(_){ location.hash='consult'; } } });
+  reset && reset.addEventListener('click', ()=>{ i=0; paint(); });
+  paint();
+})();
+/* ================================================== */
+</script>
+
+
+<script>
+/* v26: robust SPA navigation helper used by stepper */
+(function(){
+  function go(page){
+    try{
+      const sections=[...document.querySelectorAll('section.page, main.container section.page')];
+      sections.forEach(s=> s.classList.toggle('active', s.id===page));
+      const links=[...document.querySelectorAll('#spa-nav [data-page]')];
+      links.forEach(l=> l.classList.toggle('active', l.getAttribute('data-page')===page));
+    }catch(e){}
+    try{
+      const u=new URL(location.href);
+      u.searchParams.set('page', page);
+      history.replaceState(null,'', u.pathname+u.search+'#'+page);
+    }catch(_){ location.hash = page; }
+    try{ window.__centerNavActive && window.__centerNavActive(); }catch(e){}
+  }
+  window.__goPage = go;
+})();
+
+/* v26: patch Stepper to use __goPage always */
+(function(){
+  const home=document.getElementById('home'); if(!home) return;
+  const flow=home.querySelector('#flow'); const next=home.querySelector('#flowNext'); const reset=home.querySelector('#flowReset');
+  if(!flow || !next) return;
+  const steps=[...flow.querySelectorAll('.badge')]; let i=0;
+  function paint(){ steps.forEach((s,idx)=>{ s.style.opacity=idx<=i?1:.45; s.style.filter=idx<=i?'none':'grayscale(.3)'; }); next.textContent = i>=steps.length-1 ? 'Перейти к консультации' : 'Дальше'; }
+  next.addEventListener('click', ()=>{ if(i<steps.length-1){ i++; paint(); } else { try{ showToast && showToast('Открываю','Раздел «Консультация»'); }catch(_){}
+    window.__goPage && window.__goPage('consult');
+  }});
+  reset && reset.addEventListener('click', ()=>{ i=0; paint(); });
+  paint();
+})();
+</script>
+
+
+<script>
+/* v27 — Fixes: debounce toasts, robust profile toggle, reliable confetti triggers */
+
+/* 0) Guard & helpers */
+(function(){
+  window.APP_CONFIG = Object.assign({
+    TG_BOT_USERNAME: 'serge_kamensky_bot',
+    GAS_WEBHOOK: '',
+    API_KEY: '',
+    USE_TG_SIGNATURE: true
+  }, window.APP_CONFIG||{});
+  window.__uid = window.__uid || function(){ let u=localStorage.getItem('uid'); if(!u){u=Date.now().toString(36)+Math.random().toString(36).slice(2,8); localStorage.setItem('uid',u);} return u; };
+  window.__haptic = window.__haptic || function(level){ try{ Telegram.WebApp.HapticFeedback.impactOccurred(level||'light'); }catch(e){ navigator.vibrate && navigator.vibrate(25); } };
+})();
+
+/* 1) Debounced toasts — предотвращает многократные всплытия подряд */
+(function(){
+  const orig = window.showToast;
+  let lastAt = 0, lastKey = '';
+  window.showToast = function(title, msg){
+    const key = String(title||'')+'|'+String(msg||'');
+    const now = Date.now();
+    if (key===lastKey && (now - lastAt) < 900) return; // защита от «дублей»
+    lastAt = now; lastKey = key;
+    try{ if(typeof orig === 'function') return orig(title, msg); }catch(e){}
+    // fallback
+    try{ console.log('[Toast]', title, msg); }catch(e){}
+  };
+})();
+
+/* 2) Global haptics + confetti everywhere (like on "Получить расчёт") */
+(function(){
+  function conf(){
+    try{ if(window.confetti){ confetti({particleCount:140, spread:70}); return; } }catch(e){}
+  }
+  const celebrateSel = [
+    '#ctaCalc',
+    '#bonuses .toast-btn',
+    '#bonuses a.btn',
+    '#consult #confirmConsult, #consult #consultSubmit, #consult #confirmBtn',
+    '#invite #copyRef',
+    '#invite #shareRef',
+    '.btn[data-confetti]',
+    '.btn.confetti'
+  ].join(',');
+  document.addEventListener('click', (e)=>{
+    const el = e.target.closest(celebrateSel);
+    if(!el) return;
+    conf(); window.__haptic('light');
+  }, {passive:true});
+})();
+
+/* 3) Bonuses CTA safe handler (no layout break + single toast) */
+(function(){
+  const box = document.getElementById('bonuses'); if(!box) return;
+  // Links
+  box.querySelectorAll('a.btn').forEach(a=>{
+    a.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      try{ window.showToast('Откроем в боте', a.textContent.trim() || 'Событие отправлено'); }catch(e){}
+      const payload = { type:'bonus_btn', href:a.getAttribute('href'), ts:new Date().toISOString(), uid: window.__uid() };
+      try{ Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(_){}
+      // repaint for Safari
+      document.body.style.webkitTransform='translateZ(0)'; setTimeout(()=>document.body.style.webkitTransform='',60);
+    }, {passive:false});
+  });
+  // Buttons with toast-msg
+  box.querySelectorAll('.toast-btn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      window.showToast('Готово', btn.getAttribute('data-msg')||'Отправлено');
+      const payload = { type:'register_business', ts:new Date().toISOString(), uid: window.__uid() };
+      try{ Telegram?.WebApp?.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(_){}
+      document.body.style.webkitTransform='translateZ(0)'; setTimeout(()=>document.body.style.webkitTransform='',60);
+    }, {passive:false});
+  });
+})();
+
+/* 4) Profile panel — более надёжный поиск кнопки и открытие */
+(function(){
   const panel = document.getElementById('consolePanel');
-  if(!btn || !panel) return;
-  function initials(name){ const p=(name||'').trim().split(/\s+/); const a=(p[0]||'').charAt(0), b=(p[1]||'').charAt(0); return (a+(b||'')).toUpperCase()||'☺'; }
+  const btn = document.querySelector('.console-toggle, #consoleToggle, .fab-console, .console');
+  if(!panel || !btn) return;
+
   function tgUser(){ try{ return Telegram?.WebApp?.initDataUnsafe?.user || null } catch(e){ return null } }
+  function initials(name){ const p=(name||'').trim().split(/\s+/); return ((p[0]||'').charAt(0)+(p[1]||'').charAt(0)||'☺').toUpperCase(); }
   function render(){
-    const user = tgUser();
-    const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Гость';
-    const uname = user?.username ? '@'+user.username : '—';
+    const u = tgUser();
+    const name = [u?.first_name, u?.last_name].filter(Boolean).join(' ') || 'Гость';
+    const uname = u?.username ? '@'+u.username : '—';
     const pts = +localStorage.getItem('stat_points') || 0;
     const prize = (JSON.parse(localStorage.getItem('last_prizes')||'[]')||[]).slice(-1)[0] || '—';
     const booking = localStorage.getItem('last_booking') || 'Нет';
-    const bot = (window.APP_CONFIG && window.APP_CONFIG.TG_BOT_USERNAME) || 'serge_kamensky_bot';
+    const bot = (window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot';
     panel.innerHTML = `
       <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
         <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--primary));display:grid;place-items:center;font-weight:800">${initials(name)}</div>
@@ -2549,26 +2800,13 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
         <button class="btn btn-ghost" id="profClose">Закрыть</button>
       </div>
     `;
+    panel.style.display='block';
+    panel.style.maxHeight='70vh'; panel.style.width='min(420px,92vw)';
   }
-  function openPanel(){
-    render();
-    panel.style.display='block'; panel.style.maxHeight='70vh'; panel.style.width='min(420px,92vw)';
-    panel.querySelector('#profClose')?.addEventListener('click', ()=> panel.style.display='none');
-    // refresh a few times in case Telegram user arrives later
-    let tries = 0; const t = setInterval(()=>{ const u = tgUser(); if(u || tries++>20){ clearInterval(t); if(u) render(); }}, 150);
-  }
-  btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); if(panel.style.display==='block'){ panel.style.display='none'; } else { openPanel(); } }, {passive:false});
-})();
-
-// v24 — Global haptics + confetti coverage
-(function(){
-  function vibr(){ try{ Telegram.WebApp.HapticFeedback.impactOccurred('light'); }catch(e){ navigator.vibrate && navigator.vibrate(25); } }
-  function conf(){ try{ if(window.confetti) confetti({particleCount:120, spread:70}); }catch(e){} }
-  const sel = 'button,.btn,[role="button"],a.btn';
-  document.addEventListener('click', (e)=>{ if(e.target.closest(sel)){ vibr(); } }, {passive:true});
-  document.addEventListener('touchstart', (e)=>{ if(e.target.closest(sel)){ vibr(); } }, {passive:true});
-  // auto-confetti for elements with .confetti or data-confetti
-  document.addEventListener('click', (e)=>{ const el=e.target.closest('.confetti,[data-confetti]'); if(el){ conf(); } }, {passive:true});
+  function open(){ render(); __haptic('light'); let tries=0; const t=setInterval(()=>{ const u = (Telegram?.WebApp?.initDataUnsafe?.user || null); if(u || tries++>20){ clearInterval(t); if(u) render(); }}, 150); }
+  function close(){ panel.style.display='none'; }
+  btn.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); (panel.style.display==='block') ? close() : open(); }, {passive:false});
+  panel.addEventListener('click', (e)=>{ if(e.target.id==='profClose'){ close(); }}, {passive:true});
 })();
 </script>
 
