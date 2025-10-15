@@ -2106,5 +2106,103 @@ document.addEventListener('click', function(e){ if(e.target.closest('.btn')) __h
 
 </script>
 
+
+<script>
+// v19 — global haptic feedback for buttons
+(function(){
+  function haptic(level){ try{ Telegram.WebApp.HapticFeedback.impactOccurred(level||'light'); }catch(e){ navigator.vibrate && navigator.vibrate(25); } }
+  document.addEventListener('click', function(e){
+    const b = e.target.closest('.btn');
+    if(b) haptic('light');
+  }, {passive:true});
+})();
+
+// v19 — normalize all t.me deeplinks to configured bot
+(function(){
+  const C = window.APP_CONFIG || {}; const bot = C.TG_BOT_USERNAME || 'serge_kamensky_bot';
+  document.querySelectorAll('a[href*="t.me/"]').forEach(a=>{
+    try{
+      const u = new URL(a.href, location.href);
+      if(u.hostname !== 't.me') return;
+      const start = u.searchParams.get('start');
+      const hash  = u.hash || '';
+      a.href = 'https://t.me/' + bot + (start? ('?start='+start) : '') + hash;
+    }catch(e){}
+  });
+})();
+
+// v19 — "Получить персональный расчёт": конфетти + тост + отправка в бот + (опционально) GAS
+(function(){
+  const btn = document.getElementById('ctaCalc'); if(!btn) return;
+  const rev = document.getElementById('revVal');
+  const pct = document.getElementById('pctVal');
+  const was = document.getElementById('oldTax');
+  const became = document.getElementById('newTax');
+  const econ = document.getElementById('saveCounter');
+  const num = s => (s||'').toString().replace(/[^\d.-]/g,'')*1 || 0;
+
+  function tgUser(){ try{ return Telegram?.WebApp?.initDataUnsafe?.user || null }catch(e){ return null } }
+  function tgInit(){ try{ return Telegram?.WebApp?.initData || null }catch(e){ return null } }
+  function uid(){ let u=localStorage.getItem('uid'); if(!u){u=Date.now().toString(36)+Math.random().toString(36).slice(2,8); localStorage.setItem('uid',u);} return u; }
+
+  async function postGAS(payload){
+    const C = window.APP_CONFIG || {};
+    if(!C.GAS_WEBHOOK) return {ok:false, error:'no_webhook'};
+    const body = Object.assign({}, payload);
+    if (C.USE_TG_SIGNATURE && tgInit()) body.tg_init = tgInit();
+    if (!tgInit() && C.API_KEY) body.key = C.API_KEY;
+    try{
+      const r = await fetch(C.GAS_WEBHOOK, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      return await r.json().catch(()=>({ok:true}));
+    }catch(e){ return {ok:false, error:String(e)} }
+  }
+
+  btn.addEventListener('click', async ()=>{
+    // confetti + toast
+    try{ if(window.confetti) confetti({particleCount:120, spread:70}); }catch(e){}
+    try{ window.showToast && showToast('Отправлено', 'Мы получили вводные и вернёмся с рекомендациями'); }catch(e){}
+
+    const payload = {
+      type: 'calc_lead',
+      ts: new Date().toISOString(),
+      uid: uid(),
+      page: (new URL(location.href)).searchParams.get('page') || (location.hash||'#home').slice(1) || 'home',
+      calc: {
+        revenue: num(rev?.textContent),
+        effect:  num(pct?.textContent),
+        was:     num(was?.textContent),
+        become:  num(became?.textContent),
+        economy: num(econ?.textContent)
+      },
+      tg_user: tgUser()
+    };
+
+    // отправка в бота (web_app_data)
+    try{ Telegram && Telegram.WebApp && Telegram.WebApp.sendData && Telegram.WebApp.sendData(JSON.stringify(payload)); }catch(e){}
+
+    // отправка в GAS (если настроен)
+    try{ await postGAS(payload); }catch(e){}
+  });
+})();
+
+// v19 — guard: fix "services" page showing wrong content due to duplicate show()
+// Ensure only top-level sections toggle .active
+(function(){
+  const links = document.querySelectorAll('#spa-nav [data-page]');
+  const sections = Array.from(document.querySelectorAll('body > main.container section.page, body > section.page'));
+  function showSafe(id){
+    sections.forEach(s=> s.classList.toggle('active', s.id === id));
+    links.forEach(l=> l.classList.toggle('active', l.getAttribute('data-page')===id));
+  }
+  // If current hash points to a valid section but it's not visible, force it
+  const current = (location.hash||'#home').replace('#','');
+  if (sections.some(s=>s.id===current) && !document.getElementById(current).classList.contains('active')){
+    showSafe(current);
+  }
+  // Keep bubble in place if nav already initialized
+  if (window.__centerNavActive) try{ window.__centerNavActive(); }catch(e){}
+})();
+</script>
+
 </body>
 </html>
