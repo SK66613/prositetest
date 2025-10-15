@@ -336,6 +336,11 @@ html, body{ -webkit-text-size-adjust: 100%; }
 .console-panel{ z-index: 3000; }
 .console-toggle{ z-index: 3001; }
 
+
+/* v23: fully remove legacy console log visuals */
+.console-log, .console-panel pre, .console-panel .line, .console-panel .time, .console-panel .event { display:none !important; }
+.console-panel { font: inherit; color: inherit; }
+/* keep the panel container for profile usage */
 </style>
 </head>
 <body>
@@ -822,29 +827,18 @@ function __updateURL(page){
   }catch(e){ location.hash = page; }
 }
 
-// ===== In-page console =====
+
+// ===== In-page console (disabled in v23) =====
 (function(){
+  // Keep the toggle working for profile/panel later; no log hooking
   const panel = document.getElementById('consolePanel');
   const btn = document.querySelector('.console-toggle');
-  const write = (type, args)=>{
-    const line = document.createElement('div');
-    const ts = new Date().toLocaleTimeString();
-    line.className='line';
-    line.innerHTML = '<span class="time">'+ts+'</span><span class="event">['+type+'] '+Array.from(args).map(a=>typeof a==='object'?JSON.stringify(a):a).join(' ')+'</span>';
-    panel.appendChild(line);
-    panel.scrollTop = panel.scrollHeight;
-  };
-  ['log','warn','error'].forEach(fn=>{
-    const native = console[fn].bind(console);
-    console[fn] = function(){ write(fn, arguments); native.apply(console, arguments); };
-  });
-  btn.addEventListener('click', ()=>{
-    panel.style.display = panel.style.display==='block' ? 'none' : 'block';
-  });
-  console.log('UI ready');
+  if(btn && panel){
+    btn.addEventListener('click', ()=>{
+      panel.style.display = panel.style.display==='block' ? 'none' : 'block';
+    });
+  }
 })();
-
-
 
 // ===== Nav: robust clicks + drag threshold + keep carousel look =====
 (function(){
