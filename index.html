@@ -4975,5 +4975,161 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 
 })();
 </script>
+
+<script>
+// === Calendar sync V3 (robust, SPA-aware) ===
+(function(){
+  if (window.__CAL_SYNC_V3__) return; window.__CAL_SYNC_V3__ = true;
+
+  function dd2(n){ return String(n).padStart(2,'0'); }
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+
+  function findCal() {
+    const root = document.querySelector('#consult') || document;
+    const cal  = root.querySelector('#cal, .calendar, [data-cal]') || null;
+    const head = root.querySelector('#cal .cal-head .mon, .calendar .cal-head .mon, [data-cal-mon]') || null;
+    const grid = root.querySelector('#cal .cal-grid, .calendar .cal-grid, [data-cal-grid]') || null;
+    const slots= root.querySelector('#slots, #slotsTime, [data-slots]') || null;
+    return { cal, head, grid, slots };
+  }
+
+  function parseHeadYM(headEl){
+    if(!headEl) return null;
+    const t = (headEl.textContent||'').trim().toLowerCase(); // "Октябрь 2025"
+    // попробуем вытащить месяц по 3 символа
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if(!m) return null;
+    const stem = m[1].slice(0,3).replace('ё','е');
+    const mm = RU2MM[stem];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  async function loadFreeSlotsForMonth(y, m){
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y, +m, 0).getDate())}`;
+    const base  = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
+    if(!base){ console.warn('[cal] No GAS_WEBHOOK'); return false; }
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('gran','30');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+    try{
+      const tgInit = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tgInit) u.searchParams.set('tg_init', tgInit);
+      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+    }catch(_){}
+    const r = await fetch(u.toString());
+    const j = await r.json().catch(()=>null);
+    if(!j || !j.ok){ console.warn('[cal] free_slots error', j); return false; }
+    window.__FREE__ = j.days || {}; window.__GRAN__ = j.gran || 30;
+    return true;
+  }
+
+  function isDayFree(iso){
+    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
+    return Array.isArray(arr) && arr.length>0;
+  }
+
+  function renderSlots(iso, slotsEl){
+    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
+    if(!slotsEl) return;
+    slotsEl.innerHTML = '';
+    slotsEl.classList.add('show');
+    if(!arr.length){
+      slotsEl.innerHTML = '<div class="muted">Нет свободных слотов</div>';
+      return;
+    }
+    arr.forEach(label=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost';
+      b.textContent = label; b.dataset.time = label;
+      b.onclick = ()=>{
+        slotsEl.querySelectorAll('button').forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        window.SEL = window.SEL || {}; SEL.time = label;
+        window.scope = window.scope || {}; scope._selTime = label;
+      };
+      slotsEl.appendChild(b);
+    });
+  }
+
+  function applyDaysState(y, m, grid){
+    if(!grid) return;
+    grid.querySelectorAll('.cal-cell').forEach(cell=>{
+      if(cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if(!day || /\D/.test(day)) return;
+      const iso = `${y}-${m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+      if(!isDayFree(iso)){
+        cell.classList.add('off','muted');
+        cell.setAttribute('aria-disabled','true');
+      }else{
+        cell.classList.remove('off','muted');
+        cell.removeAttribute('aria-disabled');
+      }
+    });
+  }
+
+  async function sync(){
+    const {head, grid, slots} = findCal();
+    if(!head || !grid) return;
+    const ym = parseHeadYM(head); if(!ym) return;
+    const ok = await loadFreeSlotsForMonth(ym.y, ym.m); if(!ok) return;
+    applyDaysState(ym.y, ym.m, grid);
+    // если уже выбран день ранее — перерендерим слоты
+    const sel = grid.querySelector('.cal-cell.sel');
+    const iso = (sel && (sel.dataset.iso || sel.dataset.date)) || window.__selDate;
+    if (iso) renderSlots(iso, slots);
+  }
+
+  // 1) при первом показе секции #consult
+  function isConsultActive(){
+    const sec = document.getElementById('consult');
+    return sec && sec.classList.contains('active');
+  }
+  function ensureWhenConsultShown(){
+    if (isConsultActive()) { setTimeout(sync, 50); return; }
+    // наблюдаем изменения классов/DOM
+    const sec = document.getElementById('consult');
+    if (!sec) return; // пусть будет вызвано позже повторно
+    const obs = new MutationObserver(()=>{
+      if (isConsultActive()){ obs.disconnect(); setTimeout(sync, 50); }
+    });
+    obs.observe(sec, { attributes:true, attributeFilter:['class'] });
+  }
+
+  // 2) при смене хэша/клике по навигации
+  window.addEventListener('hashchange', ()=>{ if (location.hash==='#consult') setTimeout(sync, 50); });
+  document.addEventListener('click', (e)=>{
+    const a = e.target.closest && e.target.closest('a[data-page="consult"]');
+    if (a) setTimeout(sync, 50);
+  });
+
+  // 3) при навигации по месяцам
+  document.addEventListener('click', (ev)=>{
+    if (ev.target.closest('#cal #prevM') || ev.target.closest('#cal #nextM')) setTimeout(sync, 0);
+  });
+
+  // 4) выбор дня -> показать слоты
+  document.addEventListener('click', (ev)=>{
+    const cell = ev.target.closest && ev.target.closest('#cal .cal-cell, .calendar .cal-grid .cal-cell');
+    if(!cell || cell.classList.contains('off')) return;
+    const iso = cell.dataset.iso || cell.dataset.date;
+    const { slots } = findCal();
+    if(iso && slots){ window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso; renderSlots(iso, slots); }
+  });
+
+  // 5) сразу, но если #consult ещё не активен — дождёмся его
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ensureWhenConsultShown);
+  } else {
+    ensureWhenConsultShown();
+  }
+})();
+</script>
 </body>
 </html>
