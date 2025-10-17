@@ -5638,3 +5638,187 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 
 </body>
 </html>
+
+<!-- === CALENDAR HOTFIX V7: minimal robust adapter (safe to re-append) === -->
+<script>
+(function(){
+  if (window.__CAL_HOTFIX_V7__) return; window.__CAL_HOTFIX_V7__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = n => String(n).padStart(2,'0');
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+
+  function todayISO(){
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+    return new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+  }
+
+  function parseYM(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim().toLowerCase(); // "октябрь 2025"
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if (!m) return null;
+    const stem = m[1].slice(0,3).replace('ё','е');
+    const mm = RU2MM[stem];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  async function fetchFreeSlotsMonth(y, m){
+    const base = window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK;
+    if (!base) return { ok:false, error:'no_gas' };
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', `${y}-${m}-01`);
+    u.searchParams.set('to',   `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+    // Prefer fresh tg_init, fallback to API_KEY if set
+    (function attachAuth(){
+      try{
+        const init = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+        if (init) {
+          // Check freshness (<= 5 minutes, как на бэке)
+          const sp = new URLSearchParams(init);
+          const auth = Number(sp.get('auth_date')||0);
+          const age = Math.floor(Date.now()/1000) - auth;
+          if (auth && age >=0 && age <= 300) {
+            u.searchParams.set('tg_init', init);
+            return;
+          }
+        }
+      }catch(_){}
+      if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+    })();
+
+    try{
+      const r = await fetch(u.toString(), { credentials:'omit' });
+      const j = await r.json().catch(()=>null);
+      if (j && j.ok) return j;
+      // Retry with key if stale_signature
+      if (j && j.error === 'stale_signature' && window.APP_CONFIG && APP_CONFIG.API_KEY){
+        u.searchParams.delete('tg_init');
+        u.searchParams.set('key', APP_CONFIG.API_KEY);
+        const r2 = await fetch(u.toString(), { credentials:'omit' });
+        const j2 = await r2.json().catch(()=>null);
+        return j2 || { ok:false, error:'bad_json' };
+      }
+      return j || { ok:false, error:'bad_json' };
+    }catch(e){
+      return { ok:false, error:String(e) };
+    }
+  }
+
+  function applyDaysFromMap(ym, freeMap){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    const today = todayISO();
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+
+      // 1) прошлые даты всегда выключены
+      if (iso < today){
+        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); return;
+      }
+      // 2) если сервер явно отдал этот день
+      if (freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso)){
+        const arr = freeMap[iso] || [];
+        if (Array.isArray(arr) && arr.length){
+          cell.classList.remove('off','muted'); cell.removeAttribute('aria-disabled');
+        }else{
+          cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true');
+        }
+      }
+    });
+  }
+
+  function renderSlotsForDate(iso){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    const dayArr = (window.__FREE__ && window.__FREE__[iso]) || [];
+    wrap.innerHTML = ''; wrap.classList.add('show');
+    if (!Array.isArray(dayArr) || !dayArr.length){
+      wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return;
+    }
+    dayArr.forEach(t=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost btn-slot';
+      b.textContent = t;
+      b.dataset.time = t;
+      b.addEventListener('click', ()=>{
+        // make this one blue (active)
+        qsa('button', wrap).forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        // expose selection
+        window.scope = window.scope || {}; scope._selTime = t;
+        window.SEL = window.SEL || {}; SEL.time = t;
+      });
+      wrap.appendChild(b);
+    });
+  }
+
+  async function syncMonth(){
+    const ym = parseYM(); if (!ym) return;
+    const res = await fetchFreeSlotsMonth(ym.y, ym.m);
+    if (res && res.ok){
+      window.__FREE__ = res.days || {}; window.__GRAN__ = res.gran || 30;
+      applyDaysFromMap(ym, window.__FREE__);
+    }else{
+      const wrap = qs('#slots,#slotsTime'); if (wrap){
+        wrap.classList.add('show');
+        wrap.innerHTML = '<div class="muted">Сервер не отдал слоты' + (res&&res.error?': '+res.error:'') + '</div>';
+      }
+    }
+  }
+
+  // export
+  window.syncMonth = syncMonth;
+  window.renderSlotsForDate = renderSlotsForDate;
+
+  // init after first paint
+  setTimeout(syncMonth, 80);
+
+  // month navigation
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
+      setTimeout(syncMonth, 60);
+    }
+  });
+
+  // day click
+  document.addEventListener('click', (e)=>{
+    const cell = e.target.closest && e.target.closest('#cal .cal-cell');
+    if (!cell || cell.classList.contains('off')) return;
+    const iso = cell.dataset.iso || cell.dataset.date;
+    if (!iso) return;
+    window.__selDate = iso; window.scope = window.scope || {}; scope._selDate = iso;
+    renderSlotsForDate(iso);
+  });
+
+  // refresh after successful booking
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if ((type==='consult_booking' || (data&&data.type==='consult_booking')) && res && res.ok){
+          const keep = window.__selDate;
+          await syncMonth();
+          if (keep) renderSlotsForDate(keep);
+        }
+      }catch(_){}
+      return res;
+    };
+  })();
+})();
+</script>
+<style>
+/* hotfix: ensure slot buttons have consistent base and active (blue) state */
+.btn-slot{ min-width:72px; text-align:center; }
+#slots .btn-slot.off, #slotsTime .btn-slot.off{ pointer-events:none; opacity:.5 }
+</style>
