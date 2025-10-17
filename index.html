@@ -689,32 +689,16 @@ html,body{-webkit-text-size-adjust:100%}
   function applyDaysState(y, m){
     const grid = document.querySelector('#cal .cal-grid');
     if(!grid) return;
-
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
-    const todayISO = new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
-
     grid.querySelectorAll('.cal-cell').forEach(cell=>{
       if(cell.classList.contains('cal-dow')) return;
       const day = (cell.dataset.day || cell.textContent || '').trim();
       if(!day || /\D/.test(day)) return;
-      const iso = `${y}-${m}-${String(day).padStart(2,'0')}`;
+      const iso = `${y}-${m}-${dd2(day)}`;
       cell.dataset.iso = iso;
-
-      if (iso < todayISO){
-        cell.classList.add('off','muted');
-        cell.setAttribute('aria-disabled','true');
-        return;
-      }
       if(!isDayFree(iso)){
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
       }else{
-        cell.classList.remove('off','muted');
-        cell.removeAttribute('aria-disabled');
-      }
-    });
-  }
-else{
         cell.classList.remove('off','muted');
         cell.removeAttribute('aria-disabled');
       }
@@ -850,11 +834,6 @@ else{
 
   function applyDays(ym, freeMap){
     const grid = qs('#cal .cal-grid'); if (!grid) return;
-
-    // today in user's TZ (ISO yyyy-mm-dd)
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
-    const todayISO = new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
-
     qsa('.cal-cell', grid).forEach(cell=>{
       if (cell.classList.contains('cal-dow')) return;
       const day = (cell.dataset.day || cell.textContent || '').trim();
@@ -862,25 +841,14 @@ else{
       const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
       cell.dataset.iso = iso;
 
-      // Past days are always off
-      if (iso < todayISO){
-        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); return;
-      }
-
       const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
-      if (!hasKey) return;
+      if (!hasKey) return; // не трогаем, если день не пришёл с сервера
 
       const arr = (freeMap && freeMap[iso]) || [];
       if (Array.isArray(arr) && arr.length>0){
         cell.classList.remove('off','muted');
         cell.removeAttribute('aria-disabled');
       } else {
-        cell.classList.add('off','muted');
-        cell.setAttribute('aria-disabled','true');
-      }
-    });
-  }
-else {
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
       }
@@ -916,8 +884,6 @@ else {
   }
 
   // Инициализация (даём календарю отрисоваться)
-  window.syncMonth = syncMonth;
-  window.renderSlotsForDate = function(iso){ try{ renderSlots(iso, window.__FREE__); }catch(_){} };
   setTimeout(syncMonth, 60);
 
   // Перелистывание месяцев
@@ -5613,36 +5579,13 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
-
-<script>
-(function(){
-  if (window.__BOOKING_SUCCESS_REFRESH__) return; window.__BOOKING_SUCCESS_REFRESH__ = true;
-  const prev = window.apiEvent;
-  window.apiEvent = async function(type, data){
-    const res = prev ? await prev(type, data) : undefined;
-    try{
-      if ((type==='consult_booking' || (data&&data.type==='consult_booking')) && res && res.ok){
-        if (typeof window.syncMonth === 'function'){
-          const keep = window.__selDate;
-          await window.syncMonth();
-          if (keep && typeof window.renderSlotsForDate === 'function'){
-            window.renderSlotsForDate(keep);
-          }
-        }
-      }
-    }catch(_){}
-    return res;
-  };
-})();
-</script>
-
 </body>
 </html>
 
-<!-- === CALENDAR HOTFIX V7: minimal robust adapter (safe to re-append) === -->
+<!-- === CALENDAR HOTFIX V8: correct tail-of-month mapping, blue active slot, auto-refresh === -->
 <script>
 (function(){
-  if (window.__CAL_HOTFIX_V7__) return; window.__CAL_HOTFIX_V7__ = true;
+  if (window.__CAL_HOTFIX_V8__) return; window.__CAL_HOTFIX_V8__ = true;
 
   const qs  = (s,root=document)=>root.querySelector(s);
   const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
@@ -5665,6 +5608,36 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     return mm ? { y: m[2], m: mm } : null;
   }
 
+  // Compute first date shown in grid (calendar starts with Monday)
+  function firstGridISO(y, m){
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+    const d1 = new Date(`${y}-${m}-01T00:00:00`);
+    // weekdayMon0: Mon=0..Sun=6
+    const wd = (d1.getDay()+6)%7;
+    const gridStart = new Date(d1); gridStart.setDate(d1.getDate() - wd);
+    return gridStart.toLocaleString('sv-SE', {timeZone: tz}).slice(0,10);
+  }
+
+  // Re-label each .cal-cell (excluding headers) with correct ISO, and mark tails as "other"
+  function relabelCalendarCells(ym){
+    const grid = qs('#cal .cal-grid'); if (!grid) return [];
+    const list = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
+    const startISO = firstGridISO(ym.y, ym.m);
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+    const startDate = new Date(startISO+'T00:00:00');
+    const res = [];
+    list.forEach((cell, i)=>{
+      const d = new Date(startDate); d.setDate(startDate.getDate()+i);
+      const iso = d.toLocaleString('sv-SE', {timeZone: tz}).slice(0,10);
+      cell.dataset.iso = iso;
+      const mm = dd2(d.getMonth()+1);
+      const isOther = (mm !== ym.m);
+      cell.dataset.other = isOther ? '1' : '';
+      res.push({cell, iso, isOther});
+    });
+    return res;
+  }
+
   async function fetchFreeSlotsMonth(y, m){
     const base = window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK;
     if (!base) return { ok:false, error:'no_gas' };
@@ -5675,58 +5648,43 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     u.searchParams.set('gran','30');
     u.searchParams.set('lead_min','120');
     u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
-
-    // Prefer fresh tg_init, fallback to API_KEY if set
+    // auth
     (function attachAuth(){
       try{
         const init = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
-        if (init) {
-          // Check freshness (<= 5 minutes, как на бэке)
+        if (init){
           const sp = new URLSearchParams(init);
           const auth = Number(sp.get('auth_date')||0);
-          const age = Math.floor(Date.now()/1000) - auth;
-          if (auth && age >=0 && age <= 300) {
-            u.searchParams.set('tg_init', init);
-            return;
-          }
+          const age  = Math.floor(Date.now()/1000) - auth;
+          if (auth && age>=0 && age<=300){ u.searchParams.set('tg_init', init); return; }
         }
       }catch(_){}
       if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
     })();
 
     try{
-      const r = await fetch(u.toString(), { credentials:'omit' });
+      const r = await fetch(u.toString(), {credentials:'omit'});
       const j = await r.json().catch(()=>null);
       if (j && j.ok) return j;
-      // Retry with key if stale_signature
-      if (j && j.error === 'stale_signature' && window.APP_CONFIG && APP_CONFIG.API_KEY){
+      if (j && j.error==='stale_signature' && window.APP_CONFIG && APP_CONFIG.API_KEY){
         u.searchParams.delete('tg_init');
         u.searchParams.set('key', APP_CONFIG.API_KEY);
-        const r2 = await fetch(u.toString(), { credentials:'omit' });
-        const j2 = await r2.json().catch(()=>null);
-        return j2 || { ok:false, error:'bad_json' };
+        const r2 = await fetch(u.toString(), {credentials:'omit'});
+        return await r2.json().catch(()=>({ok:false,error:'bad_json'}));
       }
-      return j || { ok:false, error:'bad_json' };
-    }catch(e){
-      return { ok:false, error:String(e) };
-    }
+      return j || {ok:false,error:'bad_json'};
+    }catch(e){ return {ok:false,error:String(e)}; }
   }
 
-  function applyDaysFromMap(ym, freeMap){
-    const grid = qs('#cal .cal-grid'); if (!grid) return;
+  // Apply server data + today rule + grey tails
+  function applyDaysStrict(ym, freeMap){
     const today = todayISO();
-    qsa('.cal-cell', grid).forEach(cell=>{
-      if (cell.classList.contains('cal-dow')) return;
-      const day = (cell.dataset.day || cell.textContent || '').trim();
-      if (!day || /\D/.test(day)) return;
-      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
-      cell.dataset.iso = iso;
-
-      // 1) прошлые даты всегда выключены
-      if (iso < today){
-        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); return;
+    const mapped = relabelCalendarCells(ym); // sets dataset.iso and dataset.other
+    mapped.forEach(({cell, iso, isOther})=>{
+      if (isOther || iso < today){
+        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true');
+        return;
       }
-      // 2) если сервер явно отдал этот день
       if (freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso)){
         const arr = freeMap[iso] || [];
         if (Array.isArray(arr) && arr.length){
@@ -5734,27 +5692,25 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
         }else{
           cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true');
         }
+      } else {
+        // если день не пришёл с сервера — не меняем состояние (оставим как есть)
       }
     });
   }
 
-  function renderSlotsForDate(iso){
+  function renderSlots(iso){
     const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
-    const dayArr = (window.__FREE__ && window.__FREE__[iso]) || [];
+    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
     wrap.innerHTML = ''; wrap.classList.add('show');
-    if (!Array.isArray(dayArr) || !dayArr.length){
-      wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return;
-    }
-    dayArr.forEach(t=>{
+    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+    arr.forEach(t=>{
       const b = document.createElement('button');
       b.className = 'btn btn-ghost btn-slot';
       b.textContent = t;
       b.dataset.time = t;
       b.addEventListener('click', ()=>{
-        // make this one blue (active)
         qsa('button', wrap).forEach(x=>x.classList.remove('btn-primary','active'));
-        b.classList.add('btn-primary','active');
-        // expose selection
+        b.classList.add('btn-primary','active'); // becomes blue
         window.scope = window.scope || {}; scope._selTime = t;
         window.SEL = window.SEL || {}; SEL.time = t;
       });
@@ -5767,20 +5723,12 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     const res = await fetchFreeSlotsMonth(ym.y, ym.m);
     if (res && res.ok){
       window.__FREE__ = res.days || {}; window.__GRAN__ = res.gran || 30;
-      applyDaysFromMap(ym, window.__FREE__);
-    }else{
-      const wrap = qs('#slots,#slotsTime'); if (wrap){
-        wrap.classList.add('show');
-        wrap.innerHTML = '<div class="muted">Сервер не отдал слоты' + (res&&res.error?': '+res.error:'') + '</div>';
-      }
+      applyDaysStrict(ym, window.__FREE__);
     }
   }
+  window.syncMonth = window.syncMonth || syncMonth; // export if not already
 
-  // export
-  window.syncMonth = syncMonth;
-  window.renderSlotsForDate = renderSlotsForDate;
-
-  // init after first paint
+  // init after paint
   setTimeout(syncMonth, 80);
 
   // month navigation
@@ -5790,26 +5738,26 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     }
   });
 
-  // day click
+  // day click → show slots
   document.addEventListener('click', (e)=>{
     const cell = e.target.closest && e.target.closest('#cal .cal-cell');
     if (!cell || cell.classList.contains('off')) return;
     const iso = cell.dataset.iso || cell.dataset.date;
     if (!iso) return;
     window.__selDate = iso; window.scope = window.scope || {}; scope._selDate = iso;
-    renderSlotsForDate(iso);
+    renderSlots(iso);
   });
 
-  // refresh after successful booking
+  // after successful booking refresh month & current day
   (function(){
     const prev = window.apiEvent;
     window.apiEvent = async function(type, data){
       const res = prev ? await prev(type, data) : undefined;
       try{
-        if ((type==='consult_booking' || (data&&data.type==='consult_booking')) && res && res.ok){
+        if ((type==='consult_booking' || (data && data.type==='consult_booking')) && res && res.ok){
           const keep = window.__selDate;
           await syncMonth();
-          if (keep) renderSlotsForDate(keep);
+          if (keep) renderSlots(keep);
         }
       }catch(_){}
       return res;
@@ -5818,7 +5766,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 <style>
-/* hotfix: ensure slot buttons have consistent base and active (blue) state */
+/* Ensure slot buttons activate as blue when selected */
 .btn-slot{ min-width:72px; text-align:center; }
 #slots .btn-slot.off, #slotsTime .btn-slot.off{ pointer-events:none; opacity:.5 }
 </style>
