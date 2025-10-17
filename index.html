@@ -1120,6 +1120,143 @@ html,body{-webkit-text-size-adjust:100%}
 #devPanel button{background:#1f6feb;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer}
 #devPanel pre{white-space:pre-wrap;background:#0f172a;border:1px dashed #2b3860;border-radius:8px;padding:6px 8px;margin:6px 0 0;max-height:26vh;overflow:auto}
 </style>
+
+
+<script>
+/* === Duration bridge + slot filtering (не ломая текущую логику) === */
+(function(){
+  if (window.__DURATION_FILTER_V1__) return; window.__DURATION_FILTER_V1__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const toMin = (hhmm)=>{ const m = String(hhmm||'').match(/(\d{1,2}):(\d{2})/); if(!m) return null; return (+m[1])*60 + (+m[2]); };
+  const toHHMM = (m)=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+
+  // ---- 1) Читаем выбранную длительность из UI (разные разметки поддержим) ----
+  function getSelectedDuration() {
+    // популярные варианты: кнопки с data-* или .active, радио, селект
+    const cand =
+      qs('[data-dur].active, [data-duration].active, .dur.btn-primary, .dur.active') ||
+      qs('input[name="duration"]:checked') ||
+      qs('#duration, select[name="duration"]');
+
+    let v = 30;
+    if (cand){
+      if (cand.dataset && cand.dataset.min) v = parseInt(cand.dataset.min,10)||v;
+      else if (cand.dataset && cand.dataset.dur) v = parseInt(cand.dataset.dur,10)||v;
+      else if (cand.value) v = parseInt(cand.value,10)||v;
+      else {
+        const txt = (cand.textContent||'').replace(/\D+/g,'');
+        if (txt) v = parseInt(txt,10)||v;
+      }
+    }
+    // запасной вариант: смотрим в scope/_durMin
+    try{ if (window.scope && +scope._durMin) v = +scope._durMin; }catch(_){}
+    return Math.min(Math.max(v, 15), 240); // 15..240
+  }
+
+  // ---- 2) Прокидываем duration в consult_booking ----
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      data = data || {};
+      if (type==='consult_booking' || (data && data.type==='consult_booking')) {
+        const dur = getSelectedDuration();
+        data.duration_min = data.duration_min || dur;
+        // синхронизируем с твоим scope, чтобы остальной код «видел»
+        window.scope = window.scope || {}; scope._durMin = dur;
+      }
+      if (typeof prev === 'function') return prev(type, data);
+      if (typeof window.__postGAS === 'function') return await window.__postGAS(Object.assign({type:type}, data));
+    };
+  })();
+
+  // ---- 3) Фильтруем старты под выбранную длительность (по непрерывности шагов) ----
+  function filterStartsByDuration(starts, durMin, stepMin){
+    if (!Array.isArray(starts) || !starts.length) return [];
+    const step = Math.max(5, stepMin|| (window.__GRAN__||30));
+    if (durMin <= step) return starts.slice();
+
+    const need = Math.ceil(durMin / step);
+    const minsSet = new Set(starts.map(toMin).filter(m=>m!=null));
+    return starts.filter(t=>{
+      const m = toMin(t); if (m==null) return false;
+      for (let i=0;i<need;i++){
+        if (!minsSet.has(m + i*step)) return false; // не хватает подряд идущих шагов
+      }
+      return true;
+    });
+  }
+
+  // ---- 4) Подхватываем отрисовку слотов и применяем фильтр на лету ----
+  function refilterSlots() {
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    // текущие старты из DOM или из ответа сервера (предпочтительно из сервера)
+    let starts = [];
+    if (window.__selDate && window.__FREE__ && window.__FREE__[window.__selDate]) {
+      starts = window.__FREE__[window.__selDate].slice();
+    } else {
+      // fallback: прочитаем из кнопок
+      starts = qsa('button[data-time],button', wrap)
+        .map(b => (b.dataset.time || b.textContent || '').trim())
+        .filter(Boolean);
+    }
+
+    const dur = getSelectedDuration();
+    const step = window.__GRAN__ || 30;
+    const allowed = new Set(filterStartsByDuration(starts, dur, step));
+    // проставим доступность на кнопках
+    qsa('button', wrap).forEach(b=>{
+      const t = (b.dataset.time || b.textContent || '').trim();
+      if (!t) return;
+      const ok = allowed.has(t);
+      b.disabled = !ok;
+      b.classList.toggle('muted', !ok);
+      b.classList.toggle('off', !ok);
+      if (!ok && b.classList.contains('btn-primary')) b.classList.remove('btn-primary','active');
+    });
+
+    if (window.__DEV__){
+      const logEl = document.querySelector('#devLog');
+      const msg = `[slots] duration=${dur}, step=${step}, total=${starts.length}, allowed=${allowed.size}`;
+      if (logEl) logEl.textContent += msg + '\n'; else console.log(msg);
+    }
+  }
+
+  // --- 5) Включаем рефильтр при выборе даты/при смене длительности ---
+  // Клики по слоту/дате уже где-то обрабатываются; мы только подслушаем события.
+  document.addEventListener('click', (e)=>{
+    // смена длительности
+    if (e.target.closest('.dur, [data-dur], [data-duration], input[name="duration"], #duration, select[name="duration"]')) {
+      const dur = getSelectedDuration();
+      window.scope = window.scope || {}; scope._durMin = dur;
+      setTimeout(refilterSlots, 0);
+    }
+    // выбор даты -> после перерендера слотов чуть позже отфильтруем
+    if (e.target.closest('#cal .cal-cell')) {
+      setTimeout(refilterSlots, 30);
+    }
+  });
+
+  // если слоты дорисованы асинхронно другим кодом — подстрахуемся
+  const mo = new MutationObserver((muts)=>{
+    for (const m of muts){
+      if (m.target && (m.target.id==='slots' || m.target.id==='slotsTime')) {
+        setTimeout(refilterSlots, 0);
+        break;
+      }
+    }
+  });
+  const wrap = qs('#slots,#slotsTime'); if (wrap) mo.observe(wrap, { childList:true, subtree:true });
+
+  // начальная попытка (если выбор уже есть)
+  setTimeout(refilterSlots, 300);
+})();
+</script>
+<style>
+/* мягкая деактивация слотов, чтобы было понятно пользователю */
+#slots .off, #slotsTime .off { pointer-events:none; opacity:.5; }
+</style>
   
     
 </head>
