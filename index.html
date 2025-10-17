@@ -369,6 +369,8 @@ html,body{-webkit-text-size-adjust:100%}
 .console-panel{z-index:3000}
 .console-toggle,.fab-console{z-index:3001}
 
+</style>
+
 <!-- ==== DEV TEST (встраивается на home, видно только с ?debug=1) ==== -->
 <style>
   #dev-fab{position:fixed;right:14px;bottom:14px;z-index:9999;border:0;border-radius:999px;padding:12px 14px;background:#2b52ff;color:#fff;font:600 13px system-ui;box-shadow:0 8px 22px rgba(0,0,0,.35);cursor:pointer;display:none}
@@ -616,8 +618,6 @@ html,body{-webkit-text-size-adjust:100%}
 
   
     
-</style>
-
 <!-- === FAST PANEL CSS OVERRIDE (transform/opacity toggle) === -->
 <style>
   .console-panel{
@@ -841,6 +841,9 @@ html,body{-webkit-text-size-adjust:100%}
       const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
       cell.dataset.iso = iso;
 
+      const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
+      if (!hasKey) return; // не трогаем, если день не пришёл с сервера
+
       const arr = (freeMap && freeMap[iso]) || [];
       if (Array.isArray(arr) && arr.length>0){
         cell.classList.remove('off','muted');
@@ -850,7 +853,7 @@ html,body{-webkit-text-size-adjust:100%}
         cell.setAttribute('aria-disabled','true');
       }
     });
-  }
+    }
 
   function renderSlots(iso, freeMap){
     const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
@@ -2657,7 +2660,7 @@ const pages = document.querySelectorAll('section.page');
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
   GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
-  API_KEY: 'AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9',                            // опционально
+  API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
 
