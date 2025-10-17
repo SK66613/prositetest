@@ -689,16 +689,32 @@ html,body{-webkit-text-size-adjust:100%}
   function applyDaysState(y, m){
     const grid = document.querySelector('#cal .cal-grid');
     if(!grid) return;
+
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+    const todayISO = new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+
     grid.querySelectorAll('.cal-cell').forEach(cell=>{
       if(cell.classList.contains('cal-dow')) return;
       const day = (cell.dataset.day || cell.textContent || '').trim();
       if(!day || /\D/.test(day)) return;
-      const iso = `${y}-${m}-${dd2(day)}`;
+      const iso = `${y}-${m}-${String(day).padStart(2,'0')}`;
       cell.dataset.iso = iso;
+
+      if (iso < todayISO){
+        cell.classList.add('off','muted');
+        cell.setAttribute('aria-disabled','true');
+        return;
+      }
       if(!isDayFree(iso)){
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
       }else{
+        cell.classList.remove('off','muted');
+        cell.removeAttribute('aria-disabled');
+      }
+    });
+  }
+else{
         cell.classList.remove('off','muted');
         cell.removeAttribute('aria-disabled');
       }
@@ -834,6 +850,11 @@ html,body{-webkit-text-size-adjust:100%}
 
   function applyDays(ym, freeMap){
     const grid = qs('#cal .cal-grid'); if (!grid) return;
+
+    // today in user's TZ (ISO yyyy-mm-dd)
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+    const todayISO = new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+
     qsa('.cal-cell', grid).forEach(cell=>{
       if (cell.classList.contains('cal-dow')) return;
       const day = (cell.dataset.day || cell.textContent || '').trim();
@@ -841,14 +862,25 @@ html,body{-webkit-text-size-adjust:100%}
       const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
       cell.dataset.iso = iso;
 
+      // Past days are always off
+      if (iso < todayISO){
+        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); return;
+      }
+
       const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
-      if (!hasKey) return; // не трогаем, если день не пришёл с сервера
+      if (!hasKey) return;
 
       const arr = (freeMap && freeMap[iso]) || [];
       if (Array.isArray(arr) && arr.length>0){
         cell.classList.remove('off','muted');
         cell.removeAttribute('aria-disabled');
       } else {
+        cell.classList.add('off','muted');
+        cell.setAttribute('aria-disabled','true');
+      }
+    });
+  }
+else {
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
       }
@@ -884,6 +916,8 @@ html,body{-webkit-text-size-adjust:100%}
   }
 
   // Инициализация (даём календарю отрисоваться)
+  window.syncMonth = syncMonth;
+  window.renderSlotsForDate = function(iso){ try{ renderSlots(iso, window.__FREE__); }catch(_){} };
   setTimeout(syncMonth, 60);
 
   // Перелистывание месяцев
@@ -5579,5 +5613,28 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
+
+<script>
+(function(){
+  if (window.__BOOKING_SUCCESS_REFRESH__) return; window.__BOOKING_SUCCESS_REFRESH__ = true;
+  const prev = window.apiEvent;
+  window.apiEvent = async function(type, data){
+    const res = prev ? await prev(type, data) : undefined;
+    try{
+      if ((type==='consult_booking' || (data&&data.type==='consult_booking')) && res && res.ok){
+        if (typeof window.syncMonth === 'function'){
+          const keep = window.__selDate;
+          await window.syncMonth();
+          if (keep && typeof window.renderSlotsForDate === 'function'){
+            window.renderSlotsForDate(keep);
+          }
+        }
+      }
+    }catch(_){}
+    return res;
+  };
+})();
+</script>
+
 </body>
 </html>
