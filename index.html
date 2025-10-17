@@ -770,6 +770,176 @@ html,body{-webkit-text-size-adjust:100%}
 })();
 </script>
 
+<script>
+/* === Calendar × GAS (V5 minimal, robust) === */
+(function(){
+  if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
+
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+  const dd2 = n => String(n).padStart(2,'0');
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+
+  function parseYM(){
+    // поддержим разные верстки: #cal .cal-head .mon или .mon
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent || '').trim().toLowerCase(); // "Октябрь 2025"
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if (!m) return null;
+    const stem = m[1].slice(0,3).replace('ё','е');
+    const mm = RU2MM[stem];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  function showError(msg){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    wrap.classList.add('show');
+    wrap.innerHTML = '<div class="muted" style="padding:8px">'+ msg +'</div>';
+  }
+
+  async function loadFreeSlots(y, m){
+    const base = window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK;
+    if (!base) { showError('Нет APP_CONFIG.GAS_WEBHOOK'); return null; }
+
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+    try{
+      const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tg) u.searchParams.set('tg_init', tg);
+      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+    }catch(_){}
+
+    let r, j;
+    try{
+      r = await fetch(u.toString(), { credentials:'omit' });
+      j = await r.json();
+    }catch(e){
+      showError('Ошибка сети при загрузке слотов'); return null;
+    }
+    if (!j || j.ok === false) {
+      showError('Сервер не отдал слоты' + (j && j.error ? `: ${j.error}` : ''));
+      return null;
+    }
+    return j; // { days:{ 'YYYY-MM-DD': ['10:00','10:30',...]}, gran, tz }
+  }
+
+  function applyDays(ym, freeMap){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+
+      const arr = (freeMap && freeMap[iso]) || [];
+      if (Array.isArray(arr) && arr.length>0){
+        cell.classList.remove('off','muted');
+        cell.removeAttribute('aria-disabled');
+      } else {
+        cell.classList.add('off','muted');
+        cell.setAttribute('aria-disabled','true');
+      }
+    });
+  }
+
+  function renderSlots(iso, freeMap){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    const arr = (freeMap && freeMap[iso]) || [];
+    wrap.innerHTML = ''; wrap.classList.add('show');
+    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+    arr.forEach(time=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost';
+      b.textContent = time;
+      b.dataset.time = time;
+      b.onclick = ()=>{
+        qsa('button',wrap).forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        // сохраняем выбор — твой код брони это увидит
+        window.scope = window.scope || {}; scope._selTime = time;
+        window.SEL   = window.SEL   || {}; SEL.time = time;
+      };
+      wrap.appendChild(b);
+    });
+  }
+
+  async function syncMonth(){
+    const ym = parseYM(); if (!ym) return;                        // нет заголовка месяца
+    const data = await loadFreeSlots(ym.y, ym.m); if (!data) return;
+    window.__FREE__ = data.days || {};
+    applyDays(ym, window.__FREE__);
+  }
+
+  // Инициализация (даём календарю отрисоваться)
+  setTimeout(syncMonth, 60);
+
+  // Перелистывание месяцев
+  document.addEventListener('click', e=>{
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) {
+      setTimeout(syncMonth, 30);
+    }
+  });
+
+  // Клик по дню -> рендерим слоты
+  document.addEventListener('click', e=>{
+    const cell = e.target.closest && e.target.closest('#cal .cal-cell');
+    if (!cell || cell.classList.contains('off')) return;          // закрытый день — игнор
+    const iso = cell.dataset.iso || cell.dataset.date;
+    if (!iso) return;
+    window.scope = window.scope || {}; scope._selDate = iso;      // дай знать остальному коду
+    window.__selDate = iso;
+    renderSlots(iso, window.__FREE__);
+  });
+
+  /* ——— Бридж записи: подставь date/time/format в consult_booking ——— */
+  (function(){
+    if (window.__BOOKING_BRIDGE_V5__) return; window.__BOOKING_BRIDGE_V5__ = true;
+    function pick(){
+      let d = (window.scope && (scope._selDate||scope.selDate)) || '';
+      let t = (window.scope && (scope._selTime||scope.selTime)) || '';
+      let dur = (window.scope && (scope._durMin||scope.durMin)) || 30;
+      const btn = qs('#slots .btn-primary, #slots .active'); if (!t && btn) t = (btn.dataset.time||btn.textContent||'').trim();
+      return { date:d||'', time:t||'', duration_min:dur||30 };
+    }
+    function pickFormat(){
+      const el = qs('.consult-type.btn-primary, .consult-type.active');
+      return (el && el.dataset && el.dataset.type) || (window.SEL&&SEL.type) || (window.scope&&scope._format) || '';
+    }
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      data = data || {};
+      if (type==='consult_booking' || (data && data.type==='consult_booking')){
+        const s = pick();
+        data.date = data.date || s.date;
+        data.time = data.time || s.time;
+        data.duration_min = data.duration_min || s.duration_min;
+        data.format = data.format || pickFormat();
+      }
+      try{ if(!data.tg_init && Telegram && Telegram.WebApp) data.tg_init = Telegram.WebApp.initData; }catch(_){}
+      if (typeof prev === 'function') return prev(type, data);
+      if (typeof window.__postGAS === 'function') return await window.__postGAS(Object.assign({type:type}, data));
+    };
+  })();
+})();
+</script>
+
+<style>
+/* На случай, если стилей нет — сделаем «приглушение» */
+.cal-cell.off { pointer-events:none; }
+.muted { opacity:.5; }
+</style>
+
+  
     
 </head>
 <body>
