@@ -770,6 +770,101 @@ html,body{-webkit-text-size-adjust:100%}
 })();
 </script>
 
+
+<script>
+// --- Canonical resolver выбора брони из фронта ---
+(function(){
+  // читаем выбор из разных мест UI
+  function getSelectedBooking() {
+    // 1) scope (если новый календарь туда пишет)
+    let selDate = '';
+    let selTime = '';
+    let dur = 30;
+    try {
+      selDate = (window.scope && (scope._selDate || scope.selDate)) || '';
+      selTime = (window.scope && (scope._selTime || scope.selTime)) || '';
+      dur     = (window.scope && (scope._durMin  || scope.durMin))  || 30;
+    } catch(_) {}
+
+    // 2) localStorage.consult_selected (вариант «легаси» выбора)
+    if (!selDate || !selTime) {
+      try {
+        const s = JSON.parse(localStorage.getItem('consult_selected') || '{}');
+        if (!selDate && s.date) selDate = s.date;
+        if (!selTime && s.time) selTime = s.time;
+      } catch(_) {}
+    }
+
+    // 3) DOM (если ничего не нашли)
+    if (!selDate) {
+      const mon = document.querySelector('#cal .mon')?.textContent || '';
+      const sel = document.querySelector('#cal .cal-cell.sel');
+      if (sel && mon) {
+        const dnum = parseInt(sel.textContent,10);
+        const months = ['январ','феврал','март','апрел','май','июн','июл','август','сентябр','октябр','ноябр','декабр'];
+        let y = (mon.match(/\d{4}/) || [])[0] || new Date().getFullYear();
+        let mi = months.findIndex(m => mon.toLowerCase().includes(m));
+        if (mi < 0) mi = new Date().getMonth();
+        const dt = new Date(Number(y), mi, dnum);
+        if (!isNaN(dt)) selDate = dt.toISOString().slice(0,10);
+      }
+    }
+    if (!selTime) {
+      const act = document.querySelector('#slots .btn.btn-primary, #slots .btn.active');
+      if (act) selTime = (act.dataset.time || act.textContent || '').trim().slice(0,5); // "HH:MM"
+    }
+
+    // 4) длительность (по активной кнопке)
+    const actDur = document.querySelector('.dur.btn-primary, .dur.active');
+    if (actDur && actDur.dataset.min) dur = parseInt(actDur.dataset.min,10) || dur;
+
+    return { date: selDate || '', time: selTime || '', duration_min: dur || 30 };
+  }
+
+  // доступно глобально (если где-то уже зовут)
+  window.getSelectedBooking = window.getSelectedBooking || getSelectedBooking;
+
+  // --- Обёртка apiEvent: дополняем consult_booking датой/временем ---
+  (function wrapApiEvent(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data = {}){
+      try{
+        if ((type === 'consult_booking') || (data && data.type === 'consult_booking')) {
+          const pick = getSelectedBooking();
+          data.date = data.date || pick.date;
+          data.time = data.time || pick.time;
+          data.duration_min = data.duration_min || pick.duration_min;
+        }
+      }catch(_){}
+      // дальше — как было:
+      if (typeof prev === 'function') return prev(type, data);
+      // fallback: если apiEvent нет, шлём через __postGAS
+      if (typeof window.__postGAS === 'function') {
+        const payload = Object.assign({ type: type || (data && data.type) || '' }, data);
+        return await window.__postGAS(payload);
+      }
+    };
+  })();
+
+  // --- Обёртка __postGAS: та же подстановка на случай прямых вызовов ---
+  (function wrapPostGAS(){
+    const prev = window.__postGAS;
+    if (typeof prev !== 'function') return;
+    window.__postGAS = async function(payload){
+      try{
+        if (payload && payload.type === 'consult_booking') {
+          const pick = getSelectedBooking();
+          payload.date = payload.date || pick.date;
+          payload.time = payload.time || pick.time;
+          payload.duration_min = payload.duration_min || pick.duration_min;
+        }
+      }catch(_){}
+      return prev(payload);
+    };
+  })();
+})();
+</script>
+  
     
 </head>
 <body>
