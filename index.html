@@ -5846,3 +5846,41 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   setTimeout(syncMonth, 80);
 })();
 </script>
+
+
+<!-- === DROP-IN PATCH: force form-encoded POST to GAS (no CORS preflight) === -->
+<script>
+(function(){
+  // Override apiPost to use application/x-www-form-urlencoded
+  const buildUrl = (base) => {
+    const u = new URL(base);
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData){
+      u.searchParams.set('tg_init', Telegram.WebApp.initData);
+    }
+    if (window.APP_CONFIG){
+      if (APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+      if (APP_CONFIG.DEV_ID)  u.searchParams.set('dev_id', APP_CONFIG.DEV_ID);
+    }
+    return u;
+  };
+
+  window.apiPost = async function(payload){
+    const base = (window.APP_CONFIG && (APP_CONFIG.API_URL || APP_CONFIG.GAS_WEBHOOK));
+    if (!base) throw new Error('API_URL / GAS_WEBHOOK not set');
+    const u = buildUrl(base);
+    const form = new URLSearchParams();
+    // дублируем тип на верхнем уровне и в data
+    const t = (payload && payload.type) || '';
+    form.set('type', t);
+    form.set('data', JSON.stringify(payload || {}));
+    const r = await fetch(u.toString(), {
+      method:'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      body: form.toString()
+    });
+    // если на проде вернётся не-JSON (редко), аккуратно обработаем
+    const txt = await r.text();
+    try { return JSON.parse(txt); } catch(_) { return { ok:false, raw: txt }; }
+  };
+})();
+</script>
