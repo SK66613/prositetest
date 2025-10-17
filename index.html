@@ -1259,6 +1259,22 @@ html,body{-webkit-text-size-adjust:100%}
 </style>
   
     
+
+<!-- === FORCED APP CONFIG (PROD) === -->
+<script>
+  // Вставь сюда реальный URL твоего GAS Web App (Deployment ID):
+  // Пример: https://script.google.com/macros/s/AKfycbyOUR_DEPLOYMENT_ID/exec
+  (function(){
+    window.APP_CONFIG = window.APP_CONFIG || {};
+    // TODO: Поставь реальный URL ниже ↓↓↓
+    window.APP_CONFIG.GAS_WEBHOOK = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
+    // Для совместимости:
+    window.APP_CONFIG.API_URL = window.APP_CONFIG.GAS_WEBHOOK;
+    // Если тестируешь вне Telegram и включён ALLOW_API_KEY_FALLBACK=true — можно задать API_KEY:
+    // window.APP_CONFIG.API_KEY = 'DEV_API_KEY_OPTIONAL';
+  })();
+</script>
+
 </head>
 <body>
 
@@ -2974,7 +2990,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbz6gI7ZtQZa2HOQMDRBi5Zx6a-0eMiViIkM-pmBq9mEk7BwlRdIMSLyNTiDGmrkkO4m/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -5579,10 +5595,8 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
-</body>
-</html>
 
-<!-- === STABLE HOTFIX V8 — Calendar × GAS === -->
+<!-- === STABLE HOTFIX V8 — Calendar × GAS (race-safe, tails off, contiguous slots, pending removals) === -->
 <style>
   #cal .cal-cell.off, #cal .cal-cell.tail { pointer-events: none; }
   #cal .cal-cell.tail { opacity: .35; }
@@ -5847,11 +5861,9 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 
-
-<!-- === DROP-IN PATCH: force form-encoded POST to GAS (no CORS preflight) === -->
+<!-- === DROP-IN: force form-encoded POST to GAS (no CORS preflight) === -->
 <script>
 (function(){
-  // Override apiPost to use application/x-www-form-urlencoded
   const buildUrl = (base) => {
     const u = new URL(base);
     if (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData){
@@ -5864,12 +5876,12 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     return u;
   };
 
+  // Переопределяем apiPost единым способом (для всех мест)
   window.apiPost = async function(payload){
     const base = (window.APP_CONFIG && (APP_CONFIG.API_URL || APP_CONFIG.GAS_WEBHOOK));
-    if (!base) throw new Error('API_URL / GAS_WEBHOOK not set');
+    if (!base) throw new Error('APP_CONFIG.API_URL / GAS_WEBHOOK not set');
     const u = buildUrl(base);
     const form = new URLSearchParams();
-    // дублируем тип на верхнем уровне и в data
     const t = (payload && payload.type) || '';
     form.set('type', t);
     form.set('data', JSON.stringify(payload || {}));
@@ -5878,9 +5890,11 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
       body: form.toString()
     });
-    // если на проде вернётся не-JSON (редко), аккуратно обработаем
     const txt = await r.text();
     try { return JSON.parse(txt); } catch(_) { return { ok:false, raw: txt }; }
   };
 })();
 </script>
+
+</body>
+</html>
