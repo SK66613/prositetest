@@ -2276,66 +2276,160 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
   const calEl = document.getElementById('cal');
   if(!calEl) return;
   const slotsEl = document.getElementById('slots');
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  document.getElementById('tzInfo').textContent = 'Часовой пояс: ' + tz;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+  const tzInfo = document.getElementById('tzInfo'); if (tzInfo) tzInfo.textContent = 'Часовой пояс: ' + tz;
 
-  let selDate = null;
-  function buildCalendar(monthOffset=0){
+  let monthOffset = 0;
+  let FREE = {}; // { 'YYYY-MM-DD': ['HH:MM', ...] }
+  let selDateISO = null;
+
+  const dd2 = n => String(n).padStart(2,'0');
+  const monName = (d)=> d.toLocaleString('ru-RU', { month:'long', year:'numeric' });
+
+  function todayISO(){
+    return new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+  }
+
+  function firstGridDate(year, month){ // month: 0..11
+    const d1 = new Date(year, month, 1);
+    const wd = (d1.getDay()+6)%7; // Mon=0
+    const start = new Date(d1); start.setDate(d1.getDate()-wd);
+    return start;
+  }
+
+  function headHTML(base){
+    return '<div class="cal-head">'
+      + '<button class="btn btn-ghost" id="prevM">←</button>'
+      + '<div class="mon">'+ monName(base) +'</div>'
+      + '<button class="btn btn-ghost" id="nextM">→</button>'
+      + '</div>';
+  }
+
+  function buildCalendar(){
     const today = new Date();
-    const base = new Date(today.getFullYear(), today.getMonth()+monthOffset, 1);
-    const year = base.getFullYear(), month = base.getMonth();
-    const start = new Date(year, month, 1);
-    const startDay = (start.getDay()+6)%7; // 0=Mon
-    const daysInMonth = new Date(year, month+1, 0).getDate();
-    const daysPrev = new Date(year, month, 0).getDate();
-    // header
-    calEl.innerHTML = '<div class="cal-head"><button class="btn btn-ghost" id="prevM">←</button><div class="mon">'+base.toLocaleString("ru-RU",{month:"long", year:"numeric"})+'</div><button class="btn btn-ghost" id="nextM">→</button></div>';
-    // weekdays
+    const base  = new Date(today.getFullYear(), today.getMonth()+monthOffset, 1);
+    const year  = base.getFullYear(), month = base.getMonth();
+    const start = firstGridDate(year, month);
+    const end   = new Date(start); end.setDate(start.getDate()+41); // 6 weeks
+    calEl.innerHTML = headHTML(base);
     const grid = document.createElement('div'); grid.className='cal-grid';
     ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].forEach(d=>{
-      const c = document.createElement('div'); c.className='cal-dow'; c.textContent=d; grid.appendChild(c);
+      const c=document.createElement('div'); c.className='cal-dow'; c.textContent=d; grid.appendChild(c);
     });
-    // prev month days
-    for(let i=startDay-1; i>=0; i--){
-      const n = daysPrev - i;
-      const c = document.createElement('div'); c.className='cal-cell muted'; c.textContent=n; grid.appendChild(c);
-    }
-    // current month
-    for(let d=1; d<=daysInMonth; d++){
-      const date = new Date(year, month, d);
-      const c = document.createElement('div'); c.className='cal-cell'; c.textContent=d;
-      if(date < new Date(today.getFullYear(), today.getMonth(), today.getDate())){ c.classList.add('off'); }
-      c.onclick = ()=>{ selDate = date; grid.querySelectorAll('.cal-cell').forEach(x=>x.classList.remove('sel')); c.classList.add('sel'); renderSlots(); };
+
+    const tISO = todayISO();
+    for(let i=0;i<42;i++){
+      const d = new Date(start); d.setDate(start.getDate()+i);
+      const iso = d.toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
+      const c = document.createElement('div'); c.className='cal-cell'; c.textContent = d.getDate();
+      c.dataset.iso = iso;
+      // tail of previous/next month
+      if (d.getMonth() !== month){ c.classList.add('muted','off'); c.setAttribute('aria-disabled','true'); }
+      // past days
+      else if (iso < tISO){ c.classList.add('off','muted'); c.setAttribute('aria-disabled','true'); }
+      c.addEventListener('click', ()=>{
+        if (c.classList.contains('off')) return;
+        selDateISO = iso;
+        grid.querySelectorAll('.cal-cell').forEach(x=>x.classList.remove('sel'));
+        c.classList.add('sel');
+        renderSlots();
+      });
       grid.appendChild(c);
     }
-    // next fillers
-    while(grid.children.length % 7 !== 0){
-      const c = document.createElement('div'); c.className='cal-cell muted'; c.textContent=''; grid.appendChild(c);
-    }
     calEl.appendChild(grid);
-    // nav
-    calEl.querySelector('#prevM').onclick = ()=> buildCalendar(monthOffset-1);
-    calEl.querySelector('#nextM').onclick = ()=> buildCalendar(monthOffset+1);
+
+    calEl.querySelector('#prevM').onclick = async ()=>{ monthOffset--; await loadMonth(); };
+    calEl.querySelector('#nextM').onclick = async ()=>{ monthOffset++; await loadMonth(); };
+    // Apply server availability if already loaded
+    applyDays();
+  }
+
+  function applyDays(){
+    const grid = calEl.querySelector('.cal-grid'); if(!grid) return;
+    const tISO = todayISO();
+    grid.querySelectorAll('.cal-cell:not(.cal-dow)').forEach(c=>{
+      const iso = c.dataset.iso; if (!iso) return;
+      if (iso < tISO) return;                 // уже выключили
+      if (c.classList.contains('muted')) return; // хвост прошл/след мес
+      if (FREE && Object.prototype.hasOwnProperty.call(FREE, iso)){
+        const arr = FREE[iso] || [];
+        if (arr.length){ c.classList.remove('off','muted'); c.removeAttribute('aria-disabled'); }
+        else { c.classList.add('off','muted'); c.setAttribute('aria-disabled','true'); }
+      }
+    });
+  }
+
+  async function fetchFreeSlots(y, m){
+    const base = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK); if(!base) return {ok:false,error:'no_gas'};
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', `${y}-${dd2(m+1)}-01`);
+    u.searchParams.set('to',   `${y}-${dd2(m+1)}-${dd2(new Date(y, m+1, 0).getDate())}`);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', tz);
+    try{
+      const init = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (init){
+        const sp = new URLSearchParams(init); const auth = Number(sp.get('auth_date')||0);
+        const age = Math.floor(Date.now()/1000) - auth;
+        if (auth && age>=0 && age<=300){ u.searchParams.set('tg_init', init); }
+      } else if (window.APP_CONFIG && APP_CONFIG.API_KEY){
+        u.searchParams.set('key', APP_CONFIG.API_KEY);
+      }
+    }catch(_){}
+    const r = await fetch(u.toString()); let j=null; try{ j = await r.json(); }catch(_){}
+    if (j && j.error==='stale_signature' && window.APP_CONFIG && APP_CONFIG.API_KEY){
+      u.searchParams.delete('tg_init'); u.searchParams.set('key', APP_CONFIG.API_KEY);
+      const r2 = await fetch(u.toString()); try{ j = await r2.json(); }catch(_){}
+    }
+    return j || {ok:false,error:'bad_json'};
+  }
+
+  async function loadMonth(){
+    buildCalendar();
+    const base  = new Date(new Date().getFullYear(), new Date().getMonth()+monthOffset, 1);
+    const res   = await fetchFreeSlots(base.getFullYear(), base.getMonth());
+    if (res && res.ok){ FREE = res.days || {}; window.__FREE__ = FREE; window.__GRAN__ = res.gran || 30; applyDays(); }
   }
 
   function renderSlots(){
-    slotsEl.innerHTML='';
-    if(!selDate) return;
-    const start=10, end=19; // 10-19
-    for(let h=start; h<=end; h++){
-      const t=String(h).padStart(2,'0')+':00';
-      const b=document.createElement('button'); b.className='btn btn-ghost'; b.textContent=t;
-      b.onclick=()=>{ slotsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('btn-primary')); b.classList.add('btn-primary'); saveSelection(t); };
+    slotsEl.innerHTML = ''; slotsEl.classList.add('show');
+    if (!selDateISO){ slotsEl.innerHTML = '<div class="muted">Выберите дату</div>'; return; }
+    const arr = (FREE && FREE[selDateISO]) || [];
+    if (!arr.length){ slotsEl.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+    arr.forEach(t=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost btn-slot';
+      b.textContent = t; b.dataset.time = t;
+      b.addEventListener('click', ()=>{
+        slotsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        window.scope = window.scope || {}; scope._selDate = selDateISO; scope._selTime = t;
+        window.SEL = window.SEL || {}; SEL.date = selDateISO; SEL.time = t;
+      });
       slotsEl.appendChild(b);
-    }
+    });
   }
 
-  function saveSelection(time){
-    localStorage.setItem('consult_selected', JSON.stringify({date: selDate.toISOString().slice(0,10), time}));
-    showToast('Слот выбран', new Date(selDate.getTime()).toLocaleDateString('ru-RU') + ' ' + time);
-  }
+  // refresh after successful booking
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if ((type==='consult_booking' || (data&&data.type==='consult_booking')) && res && res.ok){
+          const keep = selDateISO;
+          await loadMonth();
+          if (keep){ selDateISO = keep; renderSlots(); }
+        }
+      }catch(_){}
+      return res;
+    };
+  })();
 
-  buildCalendar(0);
+  // init
+  loadMonth();
 })();
 
 // ===== Onboarding =====
@@ -5581,192 +5675,3 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 </script>
 </body>
 </html>
-
-<!-- === CALENDAR HOTFIX V8: correct tail-of-month mapping, blue active slot, auto-refresh === -->
-<script>
-(function(){
-  if (window.__CAL_HOTFIX_V8__) return; window.__CAL_HOTFIX_V8__ = true;
-
-  const qs  = (s,root=document)=>root.querySelector(s);
-  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
-  const dd2 = n => String(n).padStart(2,'0');
-  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
-
-  function todayISO(){
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
-    return new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10);
-  }
-
-  function parseYM(){
-    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
-    if (!h) return null;
-    const t = (h.textContent||'').trim().toLowerCase(); // "октябрь 2025"
-    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
-    if (!m) return null;
-    const stem = m[1].slice(0,3).replace('ё','е');
-    const mm = RU2MM[stem];
-    return mm ? { y: m[2], m: mm } : null;
-  }
-
-  // Compute first date shown in grid (calendar starts with Monday)
-  function firstGridISO(y, m){
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
-    const d1 = new Date(`${y}-${m}-01T00:00:00`);
-    // weekdayMon0: Mon=0..Sun=6
-    const wd = (d1.getDay()+6)%7;
-    const gridStart = new Date(d1); gridStart.setDate(d1.getDate() - wd);
-    return gridStart.toLocaleString('sv-SE', {timeZone: tz}).slice(0,10);
-  }
-
-  // Re-label each .cal-cell (excluding headers) with correct ISO, and mark tails as "other"
-  function relabelCalendarCells(ym){
-    const grid = qs('#cal .cal-grid'); if (!grid) return [];
-    const list = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
-    const startISO = firstGridISO(ym.y, ym.m);
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
-    const startDate = new Date(startISO+'T00:00:00');
-    const res = [];
-    list.forEach((cell, i)=>{
-      const d = new Date(startDate); d.setDate(startDate.getDate()+i);
-      const iso = d.toLocaleString('sv-SE', {timeZone: tz}).slice(0,10);
-      cell.dataset.iso = iso;
-      const mm = dd2(d.getMonth()+1);
-      const isOther = (mm !== ym.m);
-      cell.dataset.other = isOther ? '1' : '';
-      res.push({cell, iso, isOther});
-    });
-    return res;
-  }
-
-  async function fetchFreeSlotsMonth(y, m){
-    const base = window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK;
-    if (!base) return { ok:false, error:'no_gas' };
-    const u = new URL(base);
-    u.searchParams.set('mode','free_slots');
-    u.searchParams.set('from', `${y}-${m}-01`);
-    u.searchParams.set('to',   `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`);
-    u.searchParams.set('gran','30');
-    u.searchParams.set('lead_min','120');
-    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
-    // auth
-    (function attachAuth(){
-      try{
-        const init = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
-        if (init){
-          const sp = new URLSearchParams(init);
-          const auth = Number(sp.get('auth_date')||0);
-          const age  = Math.floor(Date.now()/1000) - auth;
-          if (auth && age>=0 && age<=300){ u.searchParams.set('tg_init', init); return; }
-        }
-      }catch(_){}
-      if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
-    })();
-
-    try{
-      const r = await fetch(u.toString(), {credentials:'omit'});
-      const j = await r.json().catch(()=>null);
-      if (j && j.ok) return j;
-      if (j && j.error==='stale_signature' && window.APP_CONFIG && APP_CONFIG.API_KEY){
-        u.searchParams.delete('tg_init');
-        u.searchParams.set('key', APP_CONFIG.API_KEY);
-        const r2 = await fetch(u.toString(), {credentials:'omit'});
-        return await r2.json().catch(()=>({ok:false,error:'bad_json'}));
-      }
-      return j || {ok:false,error:'bad_json'};
-    }catch(e){ return {ok:false,error:String(e)}; }
-  }
-
-  // Apply server data + today rule + grey tails
-  function applyDaysStrict(ym, freeMap){
-    const today = todayISO();
-    const mapped = relabelCalendarCells(ym); // sets dataset.iso and dataset.other
-    mapped.forEach(({cell, iso, isOther})=>{
-      if (isOther || iso < today){
-        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true');
-        return;
-      }
-      if (freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso)){
-        const arr = freeMap[iso] || [];
-        if (Array.isArray(arr) && arr.length){
-          cell.classList.remove('off','muted'); cell.removeAttribute('aria-disabled');
-        }else{
-          cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true');
-        }
-      } else {
-        // если день не пришёл с сервера — не меняем состояние (оставим как есть)
-      }
-    });
-  }
-
-  function renderSlots(iso){
-    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
-    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
-    wrap.innerHTML = ''; wrap.classList.add('show');
-    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
-    arr.forEach(t=>{
-      const b = document.createElement('button');
-      b.className = 'btn btn-ghost btn-slot';
-      b.textContent = t;
-      b.dataset.time = t;
-      b.addEventListener('click', ()=>{
-        qsa('button', wrap).forEach(x=>x.classList.remove('btn-primary','active'));
-        b.classList.add('btn-primary','active'); // becomes blue
-        window.scope = window.scope || {}; scope._selTime = t;
-        window.SEL = window.SEL || {}; SEL.time = t;
-      });
-      wrap.appendChild(b);
-    });
-  }
-
-  async function syncMonth(){
-    const ym = parseYM(); if (!ym) return;
-    const res = await fetchFreeSlotsMonth(ym.y, ym.m);
-    if (res && res.ok){
-      window.__FREE__ = res.days || {}; window.__GRAN__ = res.gran || 30;
-      applyDaysStrict(ym, window.__FREE__);
-    }
-  }
-  window.syncMonth = window.syncMonth || syncMonth; // export if not already
-
-  // init after paint
-  setTimeout(syncMonth, 80);
-
-  // month navigation
-  document.addEventListener('click', (e)=>{
-    if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
-      setTimeout(syncMonth, 60);
-    }
-  });
-
-  // day click → show slots
-  document.addEventListener('click', (e)=>{
-    const cell = e.target.closest && e.target.closest('#cal .cal-cell');
-    if (!cell || cell.classList.contains('off')) return;
-    const iso = cell.dataset.iso || cell.dataset.date;
-    if (!iso) return;
-    window.__selDate = iso; window.scope = window.scope || {}; scope._selDate = iso;
-    renderSlots(iso);
-  });
-
-  // after successful booking refresh month & current day
-  (function(){
-    const prev = window.apiEvent;
-    window.apiEvent = async function(type, data){
-      const res = prev ? await prev(type, data) : undefined;
-      try{
-        if ((type==='consult_booking' || (data && data.type==='consult_booking')) && res && res.ok){
-          const keep = window.__selDate;
-          await syncMonth();
-          if (keep) renderSlots(keep);
-        }
-      }catch(_){}
-      return res;
-    };
-  })();
-})();
-</script>
-<style>
-/* Ensure slot buttons activate as blue when selected */
-.btn-slot{ min-width:72px; text-align:center; }
-#slots .btn-slot.off, #slotsTime .btn-slot.off{ pointer-events:none; opacity:.5 }
-</style>
