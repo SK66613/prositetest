@@ -942,6 +942,185 @@ html,body{-webkit-text-size-adjust:100%}
 .muted { opacity:.5; }
 </style>
 
+<script>
+/* ===== DEV PANEL & AUDIT (включается по ?dev=1 или localStorage.dev=1) ===== */
+(function(){
+  const DEV = /[?&]dev=1/.test(location.search) || localStorage.getItem('dev')==='1';
+  if (!DEV) return;
+  window.__DEV__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = n=>String(n).padStart(2,'0');
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+
+  // ---------- UI ----------
+  const box = document.createElement('div');
+  box.id = 'devPanel';
+  box.innerHTML = `
+    <div class="dev-head">DEV</div>
+    <div class="dev-body">
+      <div class="row">
+        <label>GAS_WEBHOOK</label>
+        <input id="devGas" placeholder="https://script.google.com/macros/s/.../exec">
+      </div>
+      <div class="row">
+        <label>API_KEY (для браузера)</label>
+        <input id="devKey" placeholder="если ALLOW_API_KEY_FALLBACK=true">
+      </div>
+      <div class="row">
+        <button id="devPing">Ping</button>
+        <button id="devSlots">Free Slots</button>
+        <button id="devAudit">Аудит календаря</button>
+      </div>
+      <div class="row">
+        <label>Тест booking:</label>
+        <input id="devContact" placeholder="@username / +7...">
+        <button id="devBook">consult_booking</button>
+      </div>
+      <pre id="devLog"></pre>
+    </div>`;
+  document.body.appendChild(box);
+
+  const $ = id => box.querySelector(id);
+  const log = (m,obj)=>{ const t = new Date().toLocaleTimeString(); const s = typeof obj==='undefined' ? '' : ' ' + JSON.stringify(obj); $('#devLog').textContent += `[${t}] ${m}${s}\n`; };
+  const cfg = window.APP_CONFIG = window.APP_CONFIG || {};
+  $('#devGas').value = cfg.GAS_WEBHOOK || localStorage.getItem('GAS_WEBHOOK') || '';
+  $('#devKey').value = cfg.API_KEY || localStorage.getItem('API_KEY') || '';
+  $('#devContact').value = localStorage.getItem('DEV_CONTACT') || '';
+
+  // сохраняем значения
+  ['devGas','devKey','devContact'].forEach(id=>{
+    $( '#'+id ).addEventListener('change', ()=>{
+      if (id==='devGas'){ cfg.GAS_WEBHOOK = $('#devGas').value; localStorage.setItem('GAS_WEBHOOK', cfg.GAS_WEBHOOK); }
+      if (id==='devKey'){ cfg.API_KEY = $('#devKey').value; localStorage.setItem('API_KEY', cfg.API_KEY); }
+      if (id==='devContact'){ localStorage.setItem('DEV_CONTACT', $('#devContact').value); }
+    });
+  });
+
+  function parseYM(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim().toLowerCase(); // "Октябрь 2025"
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if (!m) return null;
+    const mm = RU2MM[m[1].slice(0,3).replace('ё','е')];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  async function fetchJSON(u){
+    const r = await fetch(u.toString(), { credentials:'omit' });
+    const j = await r.json().catch(()=>null);
+    return { ok:r.ok, status:r.status, data:j };
+  }
+
+  async function ping(){
+    const base = cfg.GAS_WEBHOOK; if(!base){ log('⛔ нет GAS_WEBHOOK'); return; }
+    const u = new URL(base); u.searchParams.set('mode','ping');
+    const {data} = await fetchJSON(u); log('ping', data);
+  }
+
+  async function getFreeSlots(){
+    const base = cfg.GAS_WEBHOOK; if(!base){ log('⛔ нет GAS_WEBHOOK'); return null; }
+    const ym = parseYM(); if(!ym){ log('⛔ не вижу заголовок месяца'); return null; }
+    const first = `${ym.y}-${ym.m}-01`;
+    const last  = `${ym.y}-${ym.m}-${dd2(new Date(+ym.y,+ym.m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+    try{
+      const tgi = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tgi) u.searchParams.set('tg_init', tgi);
+      else if (cfg.API_KEY) u.searchParams.set('key', cfg.API_KEY);
+    }catch(_){}
+    const {data} = await fetchJSON(u);
+    log('free_slots', data);
+    if (data && data.ok) window.__FREE__ = data.days || {};
+    return data;
+  }
+
+  function auditCalendar(){
+    const grid = qs('#cal .cal-grid'); if(!grid){ log('⛔ нет .cal-grid'); return; }
+    const ym = parseYM(); if(!ym){ log('⛔ не вижу месяц/год'); return; }
+    let bad=0, ok=0;
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      const fromSrv = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
+      if (!fromSrv) { cell.style.outline = ''; return; }
+      const arr = window.__FREE__[iso] || [];
+      const shouldOff = !(Array.isArray(arr) && arr.length>0);
+      const isOff = cell.classList.contains('off') || cell.getAttribute('aria-disabled')==='true';
+      if (shouldOff !== isOff){
+        cell.style.outline = '2px solid #e53935'; bad++;
+      } else {
+        cell.style.outline = '2px solid #43a047'; ok++;
+      }
+    });
+    log('Аудит календаря — ок/проблемы', {ok,bad});
+  }
+
+  async function bookTest(){
+    const contact = $('#devContact').value.trim();
+    localStorage.setItem('DEV_CONTACT', contact);
+    // берём выбор из твоего UI/моста
+    const s = (function(){
+      let d = (window.scope && (scope._selDate||scope.selDate)) || '';
+      let t = (window.scope && (scope._selTime||scope.selTime)) || '';
+      let dur = (window.scope && (scope._durMin||scope.durMin)) || 30;
+      const btn = qs('#slots .btn-primary, #slots .active'); if (!t && btn) t = (btn.dataset.time||btn.textContent||'').trim();
+      return { date:d||'', time:t||'', duration_min:dur||30 };
+    })();
+    const payload = { type:'consult_booking', contact, format: (window.scope&&scope._format)||'call' };
+    if (s.date) payload.date = s.date;
+    if (s.time) payload.time = s.time;
+    payload.duration_min = s.duration_min;
+
+    // отдаём через твой apiEvent/bridge, чтобы отловить коллизию слота
+    try{
+      const res = await (window.apiEvent ? window.apiEvent('consult_booking', payload) : Promise.resolve({ok:false, error:'no_apiEvent'}));
+      log('consult_booking →', payload);
+      log('consult_booking ←', res);
+    }catch(e){
+      log('consult_booking error', String(e));
+    }
+  }
+
+  // перехват apiEvent для логов
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      log('→ apiEvent', {type, data});
+      const r = prev ? await prev(type, data) : undefined;
+      log('← apiEvent', r);
+      return r;
+    };
+  })();
+
+  // кнопки
+  $('#devPing').onclick  = ping;
+  $('#devSlots').onclick = async()=>{ const d = await getFreeSlots(); if(d&&d.ok) auditCalendar(); };
+  $('#devAudit').onclick = auditCalendar;
+  $('#devBook').onclick  = bookTest;
+})();
+</script>
+<style>
+#devPanel{position:fixed;right:12px;bottom:12px;z-index:99999;background:#0b1220;color:#e6edf3;border:1px solid #24324a;border-radius:12px;width:320px;font:12px/1.4 system-ui,Segoe UI,Roboto,Arial;padding:0;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+#devPanel .dev-head{padding:8px 10px;background:#111a2b;border-bottom:1px solid #24324a;border-top-left-radius:12px;border-top-right-radius:12px;font-weight:700;letter-spacing:.5px}
+#devPanel .dev-body{padding:8px 10px;max-height:55vh;overflow:auto}
+#devPanel .row{display:flex;gap:6px;align-items:center;margin:6px 0}
+#devPanel label{min-width:110px;color:#8fb0ff}
+#devPanel input{flex:1 1 auto;background:#0f172a;border:1px solid #2f3b59;border-radius:8px;color:#e6edf3;padding:6px 8px}
+#devPanel button{background:#1f6feb;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer}
+#devPanel pre{white-space:pre-wrap;background:#0f172a;border:1px dashed #2b3860;border-radius:8px;padding:6px 8px;margin:6px 0 0;max-height:26vh;overflow:auto}
+</style>
+
 
 <script>
 /* === Duration bridge + slot filtering (не ломая текущую логику) === */
