@@ -2974,7 +2974,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbxQ17EEVfR3WBvHjgqKFH4idJpt31eq1iQPrQStIgKXGryFdvwlggQXkqMUf9uavjuX/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -5582,53 +5582,59 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 </body>
 </html>
 
-<!-- === HOTFIX V7.2 — Calendar × GAS (robust YM parsing, optimistic remove, debounce book) === -->
+<!-- === STABLE HOTFIX V8 — Calendar × GAS === -->
+<style>
+  #cal .cal-cell.off, #cal .cal-cell.tail { pointer-events: none; }
+  #cal .cal-cell.tail { opacity: .35; }
+</style>
 <script>
 (function(){
-  if (window.__CAL_GAS_HOTFIX_V72__) return; window.__CAL_GAS_HOTFIX_V72__ = true;
+  if (window.__CAL_GAS_STABLE_V8__) return; window.__CAL_GAS_STABLE_V8__ = true;
 
   const qs  = (s,root=document)=>root.querySelector(s);
   const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
   const dd2 = (n)=>String(n).padStart(2,'0');
-  const RU2MM = {
-    'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06',
-    'июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12'
-  };
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+  const USER_TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
 
-  function nowTzISO(tz){
-    try{ return new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10); }
+  let __REQ_ID__ = 0;
+  let __PENDING__ = new Set();
+
+  function todayISO(){
+    try{ return new Date().toLocaleString('sv-SE', { timeZone: USER_TZ }).slice(0,10); }
     catch(_){ return new Date().toISOString().slice(0,10); }
   }
-  const USER_TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
-  const todayISO = nowTzISO(USER_TZ);
-
-  // --- YM parser: tolerates commas, quotes, two-digit years, extra spaces ---
-  function parseYM(){
-    const el = qs('#cal .cal-head .mon') || qs('#cal .mon') || qs('.cal-month') || qs('[data-cal-month]');
-    if (!el) return null;
-    const raw = (el.textContent||'').toLowerCase().replace(/[,'`´’ʻ‘]/g,' ').replace(/\s+/g,' ').trim();
-    // Examples accepted: "октябрь 2025", "октябрь 25", "октябрь, 2025", "октябрь ’25"
-    const m = raw.match(/([а-яёa-z]+)\s+(\d{2,4})/i);
-    if (!m) return null;
-    const monthStem = m[1].slice(0,4).replace('ё','е');
-    const mm = RU2MM[monthStem.slice(0,3)] || RU2MM[monthStem.slice(0,4)];
-    let y = m[2];
-    if (y.length === 2){
-      const yy = parseInt(y,10);
-      y = String(yy < 80 ? 2000+yy : 1900+yy);
-    }
-    return mm ? { y, m: mm } : null;
+  function daysInMonth(y,m){ return new Date(y, m, 0).getDate(); }
+  function addMinHHMM(s, dm){
+    const [h,m] = s.split(':').map(Number);
+    const tot = h*60 + m + dm;
+    const nh = String(Math.floor(tot/60)).padStart(2,'0'); const nm = String(tot%60).padStart(2,'0');
+    return nh+':'+nm;
   }
 
-  function fallbackYM(){
-    // 1) from any day cell with dataset.iso
-    const d = qs('#cal .cal-cell[data-iso]');
-    if (d && d.dataset.iso){
-      const [y,m] = d.dataset.iso.split('-');
+  function parseYM(){
+    const el = qs('#cal [data-year][data-month]');
+    if (el) return { y: el.getAttribute('data-year'), m: el.getAttribute('data-month') };
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon') || qs('.cal-month') || qs('[data-cal-month]');
+    if (!h) return null;
+    const t = (h.textContent||'').toLowerCase().replace(/[,'`´’ʻ‘]/g,' ').replace(/\s+/g,' ').trim();
+    const m = t.match(/([а-яёa-z]+)\s+(\d{2,4})/i);
+    if (!m) return null;
+    const stem = m[1].slice(0,4).replace('ё','е');
+    const mm = RU2MM[stem.slice(0,3)] || RU2MM[stem.slice(0,4)];
+    let y = m[2];
+    if (y.length===2){ const yy = parseInt(y,10); y = String(yy<80?2000+yy:1900+yy); }
+    return mm ? { y, m:mm } : null;
+  }
+
+  function buildYMByGrid(){
+    const cell = qs('#cal .cal-cell[data-iso]');
+    if (cell && cell.dataset.iso){
+      const [y,m] = cell.dataset.iso.split('-');
       return { y, m };
     }
-    // 2) from today
-    const dt = new Date(); return { y: String(dt.getUTCFullYear()), m: dd2(dt.getUTCMonth()+1) };
+    const now = new Date();
+    return { y:String(now.getUTCFullYear()), m: dd2(now.getUTCMonth()+1) };
   }
 
   async function fetchFreeSlotsMonth(y, m){
@@ -5640,7 +5646,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     u.searchParams.set('mode','free_slots');
     u.searchParams.set('from', first);
     u.searchParams.set('to',   last);
-    u.searchParams.set('tz', USER_TZ);
+    u.searchParams.set('tz', (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'));
     try{
       const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
       if (tg) u.searchParams.set('tg_init', tg);
@@ -5652,27 +5658,41 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     return (j && j.ok) ? j : null;
   }
 
-  function applyDaysFromMap(ym, freeMap){
+  function markTailsAndAttachISO(ym){
     const grid = qs('#cal .cal-grid'); if (!grid) return;
-    qsa('.cal-cell', grid).forEach(cell=>{
-      if (cell.classList.contains('cal-dow')) return;
-      const day = (cell.dataset.day || cell.textContent || '').trim();
-      if (!day || /\\D/.test(day)) return;
-      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
-      cell.dataset.iso = iso;
-
-      const isPast = (iso < todayISO);
-      const hasSlots = freeMap && Array.isArray(freeMap[iso]) && freeMap[iso].length>0;
-      cell.classList.toggle('off', isPast || !hasSlots);
-      cell.classList.toggle('muted', isPast || !hasSlots);
-      if (isPast || !hasSlots) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+    const cells = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
+    let startIdx = cells.findIndex(c => /^\\s*1\\s*$/.test((c.dataset.day || c.textContent || '').trim()));
+    if (startIdx < 0) startIdx = 0;
+    const total = daysInMonth(+ym.y, +ym.m);
+    const endIdx = startIdx + total - 1;
+    cells.forEach((cell, idx)=>{
+      const dayTxt = (cell.dataset.day || cell.textContent || '').trim();
+      const dayNum = /^\\d+$/.test(dayTxt) ? parseInt(dayTxt,10) : NaN;
+      const inMonth = (idx >= startIdx && idx <= endIdx && !isNaN(dayNum) && dayNum>=1 && dayNum<=total);
+      if (inMonth){
+        const iso = `${ym.y}-${ym.m}-${dd2(dayNum)}`;
+        cell.dataset.iso = iso;
+        cell.classList.remove('tail');
+      } else {
+        cell.classList.add('tail','off');
+        cell.setAttribute('aria-disabled','true');
+        if (cell.dataset.iso) delete cell.dataset.iso;
+      }
     });
   }
 
-  function addMinHHMM(s, dm){
-    const [h,m] = s.split(':').map(Number); const tot = h*60 + m + dm;
-    const nh = String(Math.floor(tot/60)).padStart(2,'0'); const nm = String(tot%60).padStart(2,'0');
-    return nh+':'+nm;
+  function applyDaysFromMap(ym, freeMap){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    markTailsAndAttachISO(ym);
+    const today = todayISO();
+    qsa('#cal .cal-cell').forEach(cell=>{
+      if (cell.classList.contains('cal-dow') || cell.classList.contains('tail')) return;
+      const iso = cell.dataset.iso;
+      const has = iso && Array.isArray(freeMap[iso]) && freeMap[iso].length>0;
+      const ok  = has && iso >= today;
+      cell.classList.toggle('off', !ok);
+      if (!ok) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+    });
   }
 
   function contiguousOK(arr, start, step, need){
@@ -5681,14 +5701,16 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   }
 
   function renderSlotsForDate(iso, keepTime, autoPickIfMissing){
-    const container = qs('#slots,#slotsTime'); if (!container) return;
-    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
-    container.innerHTML = ''; container.classList.add('show');
-    if (!arr.length){ container.innerHTML = '<div class=\"muted\">Нет свободных слотов</div>'; return; }
-
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    const arr0 = (window.__FREE__ && window.__FREE__[iso]) || [];
     const step = (window.__GRAN__ || 30);
     const dur  = (window.scope && (scope._durMin||30)) || 30;
     const need = Math.ceil(dur/step);
+
+    const arr = arr0.filter(t => !__PENDING__.has(`${iso}@${t}#${dur}#${step}`));
+
+    wrap.innerHTML = ''; wrap.classList.add('show');
+    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
 
     arr.forEach(t=>{
       const ok = contiguousOK(arr, t, step, need);
@@ -5697,96 +5719,107 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
       b.textContent = t; b.dataset.time = t;
       if (ok){
         b.addEventListener('click', ()=>{
-          qsa('button', container).forEach(x=>x.classList.remove('btn-primary','active'));
+          qsa('button', wrap).forEach(x=>x.classList.remove('btn-primary','active'));
           b.classList.add('btn-primary','active');
           window.scope = window.scope || {}; scope._selTime = t;
           window.SEL = window.SEL || {}; SEL.time = t;
         });
       }
-      container.appendChild(b);
+      wrap.appendChild(b);
     });
 
-    // keep selected time if still valid
     let picked = false;
     if (keepTime && arr.includes(keepTime) && contiguousOK(arr, keepTime, step, need)){
-      const btn = Array.from(container.querySelectorAll('button')).find(x => (x.textContent||'').trim() === keepTime);
+      const btn = Array.from(wrap.querySelectorAll('button')).find(x => (x.textContent||'').trim() === keepTime);
       if (btn){ btn.click(); picked = true; }
     }
-    // else auto-pick first contiguous
     if (!picked && autoPickIfMissing){
-      const firstOk = Array.from(container.querySelectorAll('button')).find(b => !b.classList.contains('disabled'));
+      const firstOk = Array.from(wrap.querySelectorAll('button')).find(b => !b.classList.contains('disabled'));
       if (firstOk) firstOk.click();
     }
   }
 
   async function syncMonth(){
-    let ym = parseYM() || fallbackYM();
+    let ym = parseYM() || buildYMByGrid(); if (!ym) return;
+    const my = ++__REQ_ID__;
     const j = await fetchFreeSlotsMonth(ym.y, ym.m);
+    if (my !== __REQ_ID__) return;
     if (j){
       window.__FREE__ = j.days || {}; window.__GRAN__ = j.gran || 30;
+      if (window.__FREE__ && __PENDING__.size){
+        for (const k of __PENDING__){
+          const [date, rest] = k.split('@'); const time = rest.split('#')[0];
+          if (Array.isArray(window.__FREE__[date])){
+            window.__FREE__[date] = window.__FREE__[date].filter(t => t !== time);
+          }
+        }
+      }
       applyDaysFromMap(ym, window.__FREE__);
     }
   }
 
-  // optimistic remove + debounce book
   let bookingBusy = false;
-  async function bookHandlerWrapper(prevApiEvent, type, data){
-    const res = await (prevApiEvent ? prevApiEvent(type, data) : undefined);
-    try{
-      if ((type==='consult_booking' || (data && data.type==='consult_booking'))){
-        if (res && res.ok){
-          // resync + keep day
-          const keep = (window.scope && scope._selDate) || '';
-          await syncMonth();
-          if (keep) renderSlotsForDate(keep, (window.scope && scope._selTime) || '', false);
-        }else{
-          // failed → rollback optimistic change if мы её ранее сделали
-          if (window.__lastOptimistic){
-            const { date, time, dur } = window.__lastOptimistic;
-            const step = (window.__GRAN__ || 30);
-            const need = Math.ceil((dur||30)/step);
-            const arr = window.__FREE__[date] || [];
-            const toAdd = Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step));
-            window.__FREE__[date] = Array.from(new Set(arr.concat(toAdd))).sort();
-            renderSlotsForDate(date, time, true);
-            window.__lastOptimistic = null;
-          }
-        }
-      }
-    }catch(_){}
-    bookingBusy = false;
-    const btn = qs('#book,#doBook,#makeBooking'); if (btn){ btn.disabled = false; }
-    return res;
-  }
-
-  // monkeypatch apiEvent to add optimistic remove & debounce
   (function(){
     const prev = window.apiEvent;
     window.apiEvent = async function(type, data){
-      if (type==='consult_booking' || (data && data.type==='consult_booking')){
+      const isBook = (type==='consult_booking' || (data && data.type==='consult_booking'));
+      if (isBook){
         if (bookingBusy) return { ok:false, error:'busy' };
         bookingBusy = true;
-        const btn = qs('#book,#doBook,#makeBooking'); if (btn){ btn.disabled = true; }
-        // optimistic remove from client cache
+        const btn = qs('#book,#doBook,#makeBooking'); if (btn) btn.disabled = true;
+
         const date = (data && data.date) || (window.scope && scope._selDate);
         const time = (data && data.time) || (window.scope && scope._selTime);
-        const dur  = (data && (data.duration_min||data.duration)) || (window.scope && (scope._durMin||30)) || 30;
-        if (date && time && window.__FREE__){
-          const step = (window.__GRAN__ || 30);
-          const need = Math.ceil(dur/step);
-          const arr  = window.__FREE__[date] || [];
-          const toRemove = new Set(Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step)));
-          window.__FREE__[date] = arr.filter(t => !toRemove.has(t));
-          window.__lastOptimistic = { date, time, dur };
-          // repaint quickly
+        const dur  = (data && (data.duration_min || data.duration)) || (window.scope && (scope._durMin||30)) || 30;
+        const step = (window.__GRAN__ || 30);
+        const need = Math.ceil(dur/step);
+        if (date && time){
+          const arr = (window.__FREE__ && window.__FREE__[date]) || [];
+          const toRemove = Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step));
+          window.__FREE__ = window.__FREE__ || {};
+          window.__FREE__[date] = arr.filter(t => !toRemove.includes(t));
+          toRemove.forEach(t => __PENDING__.add(`${date}@${t}#${dur}#${step}`));
           renderSlotsForDate(date, time, false);
         }
       }
-      return bookHandlerWrapper(prev, type, data);
+
+      const res = prev ? await prev(type, data) : undefined;
+
+      try{
+        if (isBook){
+          if (res && res.ok){
+            const date = (data && data.date) || (window.scope && scope._selDate);
+            const time = (data && data.time) || (window.scope && scope._selTime);
+            const dur  = (data && (data.duration_min || data.duration)) || (window.scope && (scope._durMin||30)) || 30;
+            const step = (window.__GRAN__ || 30);
+            const need = Math.ceil(dur/step);
+            const toRemove = Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step));
+            toRemove.forEach(t => __PENDING__.delete(`${date}@${t}#${dur}#${step}`));
+            await syncMonth();
+            if (date) renderSlotsForDate(date, '', false);
+          } else {
+            const date = (data && data.date) || (window.scope && scope._selDate);
+            const time = (data && data.time) || (window.scope && scope._selTime);
+            const dur  = (data && (data.duration_min || data.duration)) || (window.scope && (scope._durMin||30)) || 30;
+            const step = (window.__GRAN__ || 30);
+            const need = Math.ceil(dur/step);
+            const arr = (window.__FREE__ && window.__FREE__[date]) || [];
+            const toAdd = Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step));
+            window.__FREE__ = window.__FREE__ || {};
+            window.__FREE__[date] = Array.from(new Set(arr.concat(toAdd))).sort();
+            toAdd.forEach(t => __PENDING__.delete(`${date}@${t}#${dur}#${step}`));
+            renderSlotsForDate(date, time, true);
+          }
+        }
+      } finally {
+        bookingBusy = false;
+        const btn = qs('#book,#doBook,#makeBooking'); if (btn) btn.disabled = false;
+      }
+
+      return res;
     };
   })();
 
-  // wire up clicks
   document.addEventListener('click', (e)=>{
     if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
       setTimeout(syncMonth, 60);
@@ -5794,7 +5827,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
   document.addEventListener('click', (e)=>{
     const cell = e.target.closest && e.target.closest('#cal .cal-cell'); if (!cell) return;
-    if (cell.classList.contains('off')) return;
+    if (cell.classList.contains('off') || cell.classList.contains('tail')) return;
     const iso = cell.dataset.iso || cell.dataset.date; if (!iso) return;
     window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
     renderSlotsForDate(iso, (window.scope && scope._selTime) || '', true);
@@ -5810,7 +5843,6 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     if (iso) setTimeout(()=> renderSlotsForDate(iso, keep, true), 10);
   }, {capture:true});
 
-  // init
   setTimeout(syncMonth, 80);
 })();
 </script>
