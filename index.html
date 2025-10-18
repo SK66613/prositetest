@@ -1262,6 +1262,189 @@ html,body{-webkit-text-size-adjust:100%}
 /* мягкая деактивация слотов, чтобы было понятно пользователю */
 #slots .off, #slotsTime .off { pointer-events:none; opacity:.5; }
 </style>
+
+<!-- ==== STEP6 VER-CACHE: versioned month cache + stale-while-revalidate ==== -->
+<script>
+(function(){
+  if (window.__CAL_STEP6_VER_CACHE__) return; window.__CAL_STEP6_VER_CACHE__ = true;
+
+  const TZ  = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+  const dd2 = n => String(n).padStart(2,'0');
+  const keyYM = (y,m)=> `${y}-${m}`;
+
+  // --- helpers to read header YM (works with both heads you use) ---
+  function parseYM_any(){
+    try{ if (typeof parseYM==='function'){ const r=parseYM(); if(r&&r.y&&r.m) return r; } }catch(_){}
+    try{ if (typeof parseHeadYM==='function'){ const r=parseHeadYM(); if(r&&r.y&&r.m) return r; } }catch(_){}
+    // fallback from "Октябрь 2025"
+    const h = document.querySelector('#cal .cal-head .mon')||document.querySelector('#cal .mon');
+    if (h){
+      const t=(h.textContent||'').trim();
+      const map={янв:'01',фев:'02',мар:'03',апр:'04',мая:'05',май:'05',июн:'06',июл:'07',авг:'08',сен:'09',сент:'09',окт:'10',ноя:'11',дек:'12',
+                 jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+      const m=t.toLowerCase().replace('ё','е').match(/^[^\d\s]+/);
+      const y=t.match(/(\d{4})/);
+      if(m&&y){ const mm=map[m[0].slice(0,3)]; if(mm) return {y:y[1], m:mm}; }
+    }
+    const now=new Date(); return { y:String(now.getFullYear()), m:dd2(now.getMonth()+1) };
+  }
+
+  // --- our RAM cache separate from old layer (to avoid closure issues) ---
+  const RAM = new Map();
+
+  function readSS(k){
+    try { return JSON.parse(sessionStorage.getItem('free:'+k)||'null'); } catch(_){ return null; }
+  }
+  function writeSS(k, obj){
+    try { sessionStorage.setItem('free:'+k, JSON.stringify(obj)); } catch(_){}
+  }
+
+  // wrap original getCache / setCache if they exist, but make version-aware
+  const orig_getCache = window.getCache;
+  const orig_setCache = window.setCache;
+
+  function getCacheV(y,m){
+    const k = keyYM(y,m);
+    // prefer our RAM first
+    if (RAM.has(k)) {
+      const e = RAM.get(k);
+      if (e && (Date.now()-(e.ts||0)) < (window.__TTL_MS__||60*1000)) return e;
+    }
+    // try original
+    let e = null;
+    if (typeof orig_getCache === 'function') {
+      try { e = orig_getCache(y,m); } catch(_){}
+    }
+    // ensure ver presence if exists in SS
+    if (!e) e = readSS(k);
+    if (e) {
+      // normalize shape
+      e.ver = Number(e.ver||0);
+      RAM.set(k, e);
+      return (Date.now()-(e.ts||0)) < (window.__TTL_MS__||60*1000) ? e : null;
+    }
+    return null;
+  }
+
+  function setCacheV(y,m,days,gran,tz,ver){
+    const k = keyYM(y,m);
+    const e = { ts: Date.now(), days: days||{}, gran: gran||30, tz: tz||TZ, ver: Number(ver||0) };
+    RAM.set(k, e);
+    writeSS(k, e);
+    // also call original setCache to preserve old flow (it will ignore ver)
+    if (typeof orig_setCache === 'function'){
+      try { orig_setCache(y,m,days,gran,tz); } catch(_){}
+      // then rewrite SS with ver again (orig_setCache may have overwritten it)
+      writeSS(k, e);
+    }
+    return e;
+  }
+
+  // expose for other layers
+  window.getCache = getCacheV;
+  window.setCache = setCacheV;
+
+  // --- reapply UI if current calendar month matches passed ym ---
+  function applyIfCurrent(ym, days, gran, tz){
+    const cur = parseYM_any();
+    if (!cur || cur.y!==ym.y || cur.m!==ym.m) return;
+    window.__FREE__ = days || {};
+    window.__GRAN__ = gran || 30;
+    if (typeof window.applyDays === 'function') window.applyDays(ym, window.__FREE__);
+    else if (typeof window.applyDaysFromMap === 'function') window.applyDaysFromMap(ym, window.__FREE__);
+  }
+
+  // --- patch V5 fetch wrapper (stale-while-revalidate) ---
+  if (typeof window.loadFreeSlots === 'function'){
+    const orig = window.loadFreeSlots;
+    window.loadFreeSlots = async function(y,m,opt){
+      opt = opt||{};
+      const k = keyYM(y,m);
+      const cached = getCacheV(y,m);
+
+      // return cached instantly (no flicker)
+      if (cached && !opt.force){
+        // background revalidate
+        queueMicrotask(async ()=>{
+          try {
+            const data = await orig.call(this, y,m, { force:true });
+            // data may be {ok,days,gran,tz,ver} or similar
+            const ver = Number((data && data.ver) || 0);
+            if (!cached || ver>Number(cached.ver||0)) {
+              setCacheV(y,m, data && data.days || {}, (data && data.gran)||30, (data && data.tz)||TZ, ver);
+              applyIfCurrent({y,m}, (data && data.days)||{}, (data && data.gran)||30, (data && data.tz)||TZ);
+            }
+          } catch(_){}
+        });
+        // sync globals for callers that expect __FREE__/__GRAN__
+        window.__FREE__ = cached.days || {};
+        window.__GRAN__ = cached.gran || 30;
+        return { ok:true, days: cached.days, gran: cached.gran, tz: cached.tz, ver: cached.ver, cached:true };
+      }
+
+      // no cache or force -> normal fetch and update cache
+      const data = await orig.apply(this, arguments);
+      const ver  = Number((data && data.ver) || 0);
+      if (data && data.days){
+        setCacheV(y,m, data.days, data.gran, data.tz, ver);
+      }
+      return data;
+    };
+  }
+
+  // --- patch early loader too (same S-W-R) ---
+  if (typeof window.loadFreeSlotsForMonth === 'function'){
+    const orig2 = window.loadFreeSlotsForMonth;
+    window.loadFreeSlotsForMonth = async function(y,m,opt){
+      opt=opt||{};
+      const cached = getCacheV(y,m);
+      if (cached && !opt.force){
+        window.__FREE__ = cached.days; window.__GRAN__ = cached.gran||30;
+        // background revalidate
+        queueMicrotask(async ()=>{
+          try{
+            await orig2.call(this, y,m, { force:true });
+            // early loader usually fills __FREE__/__GRAN__ — прочитаем и перезапишем с версией, если back вернул вер
+            const last = (window.__FREE__ && Object.keys(window.__FREE__).length) ? window.__FREE__ : null;
+            // попробуем достать свежий JSON прямо через sessionStorage, если другой слой уже записал версию
+            const ym = {y,m}; const k = 'free:'+keyYM(y,m); let ss=null;
+            try { ss = JSON.parse(sessionStorage.getItem(k)||'null'); } catch(_){}
+            const ver = Number(ss && ss.ver || 0);
+            if (last) setCacheV(y,m,last, window.__GRAN__||30, TZ, ver);
+            applyIfCurrent(ym, last||cached.days, window.__GRAN__||cached.gran||30, TZ);
+          }catch(_){}
+        });
+        return;
+      }
+      await orig2.apply(this, arguments);
+      const ym = {y,m};
+      // прочитаем текущие __FREE__/__GRAN__ и положим в наш кэш
+      const days = window.__FREE__ || {};
+      const gran = window.__GRAN__ || 30;
+      // если в sessionStorage уже лежит запись с ver — используем её
+      let ver=0; try{ const ss=JSON.parse(sessionStorage.getItem('free:'+keyYM(y,m))||'null'); ver=Number(ss&&ss.ver||0); }catch(_){}
+      setCacheV(y,m,days,gran,TZ,ver);
+    };
+  }
+
+  // --- keep cache in sync when STEP5 syncMonth fetches direct JSON with ver ---
+  if (typeof window.syncMonth === 'function'){
+    const orig = window.syncMonth;
+    window.syncMonth = async function(){
+      const ym = parseYM_any();
+      const res = await orig.apply(this, arguments);
+      // try to read last json (if fetch function stored ver in SS)
+      try{
+        const ss = JSON.parse(sessionStorage.getItem('free:'+keyYM(ym.y,ym.m))||'null');
+        const ver = Number(ss && ss.ver || 0);
+        if (window.__FREE__) setCacheV(ym.y, ym.m, window.__FREE__, window.__GRAN__||30, TZ, ver);
+      }catch(_){}
+      return res;
+    };
+  }
+})();
+</script>
+
   
     
 </head>
@@ -2979,7 +3162,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbx6bl36U59G3fAgBKYWB5TRzZY20bR0XrwFO64ld-Wrcz_xKdaRCyMSHPQVgNHLKIy4/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwD28iQzUk2oItU8nGTNYIXVyO55e5ijdjhhy8qrlR1fIr8NalncNfVTrbuAWsOWP6o/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
