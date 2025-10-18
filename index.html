@@ -5584,6 +5584,231 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
+
+<!-- ==== STEP2 NORMAL: tails hidden + monthly cache (race-safe, non-invasive) ==== -->
+<style>
+  /* Хвосты соседних месяцев — полностью скрываем и запрещаем клики */
+  #cal .cal-cell.tail{ visibility:hidden; pointer-events:none; }
+</style>
+<script>
+(function(){
+  if (window.__CAL_STEP2_NORMAL__) return; window.__CAL_STEP2_NORMAL__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = (n)=>String(n).padStart(2,'0');
+  const TZ  = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+  // ---------- MONTH HELPERS ----------
+  function parseYM_fallback(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim();
+    const m = t.match(/([А-Яа-яA-Za-zЁё]+)\s+(\d{4})/);
+    if (!m) return null;
+    const map = {янв:'01',фев:'02',мар:'03',апр:'04',мая:'05',май:'05',июн:'06',июл:'07',авг:'08',сен:'09',сент:'09',окт:'10',ноя:'11',дек:'12',
+                 jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const stem = m[1].toLowerCase().replace('ё','е').slice(0,3);
+    const mm = map[stem]; if (!mm) return null;
+    return { y: m[2], m: mm };
+  }
+  function parseYM(){
+    try{
+      if (typeof window.parseYM === 'function'){ const r = window.parseYM(); if (r && r.y && r.m) return r; }
+    }catch(_){}
+    try{
+      if (typeof window.parseHeadYM === 'function'){ const r = window.parseHeadYM(); if (r && r.y && r.m) return r; }
+    }catch(_){}
+    return parseYM_fallback();
+  }
+  function daysInMonth(y,m){ return new Date(+y, +m, 0).getDate(); }
+
+  // ---------- TAILS MARKER ----------
+  function markTailsAndAttachISO(ym){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    const cells = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
+    if (!cells.length) return;
+
+    // Найти индекс первой ячейки с "1"
+    let startIdx = -1;
+    for (let i=0;i<cells.length;i++){
+      const raw = (cells[i].dataset.day || cells[i].textContent || '').trim();
+      if (/^\d+$/.test(raw) && parseInt(raw,10) === 1){ startIdx = i; break; }
+    }
+    if (startIdx < 0) startIdx = 0;
+
+    const total = daysInMonth(ym.y, ym.m);
+    const endIdx = startIdx + total - 1;
+
+    cells.forEach((cell, idx)=>{
+      const dayTxt = (cell.dataset.day || cell.textContent || '').trim();
+      const dayNum = /^\d+$/.test(dayTxt) ? parseInt(dayTxt,10) : NaN;
+      const inMonth = (idx >= startIdx && idx <= endIdx && !isNaN(dayNum) && dayNum>=1 && dayNum<=total);
+      if (inMonth){
+        const iso = `${ym.y}-${ym.m}-${dd2(dayNum)}`;
+        cell.dataset.iso = iso;
+        cell.classList.remove('tail');
+        cell.style.visibility = '';
+      } else {
+        cell.classList.add('tail','off');
+        cell.setAttribute('aria-disabled','true');
+        if (cell.dataset.iso) delete cell.dataset.iso;
+      }
+    });
+  }
+
+  // ---------- MONTH CACHE (RAM + sessionStorage) ----------
+  const TTL_MS = 3 * 60 * 1000; // 3 минуты
+  const RAM = new Map();
+  function keyYM(y,m){ return `${y}-${m}`; }
+  function getCache(y,m){
+    const k = keyYM(y,m);
+    let e = RAM.get(k);
+    if (!e){
+      try{ e = JSON.parse(sessionStorage.getItem('free:'+k) || 'null'); }catch(_){ e = null; }
+      if (e) RAM.set(k, e);
+    }
+    if (e && (Date.now() - (e.ts||0)) < TTL_MS) return e;
+    return null;
+  }
+  function setCache(y,m,days,gran,tz){
+    const k = keyYM(y,m);
+    const e = { ts: Date.now(), days: days||{}, gran: gran||30, tz: tz||TZ };
+    RAM.set(k, e);
+    try{ sessionStorage.setItem('free:'+k, JSON.stringify(e)); }catch(_){}
+    return e;
+  }
+  function invalidateMonth(y,m){
+    const k = keyYM(y,m);
+    RAM.delete(k);
+    try{ sessionStorage.removeItem('free:'+k); }catch(_){}
+  }
+
+  // ---------- WRAPS (non-invasive) ----------
+  // 1) Оборачиваем applyDays/applyDaysState, чтобы сначала отмечать хвосты
+  (function(){
+    const wrapApply = (fnName, mapper)=>{
+      const orig = window[fnName];
+      if (typeof orig !== 'function') return;
+      window[fnName] = function(){
+        // попытка достать YM из аргументов или заголовка
+        let ym = null;
+        if (arguments.length && typeof arguments[0]==='object' && arguments[0].y && arguments[0].m){
+          ym = arguments[0];
+        } else if (arguments.length>=2) {
+          ym = { y: arguments[0], m: arguments[1] };
+        } else {
+          ym = parseYM();
+        }
+        if (ym) try{ markTailsAndAttachISO(ym); }catch(_){}
+        return orig.apply(this, arguments);
+      };
+    };
+    wrapApply('applyDays');        // V5
+    wrapApply('applyDaysState');   // ранний блок
+  })();
+
+  // 2) Оборачиваем загрузчики месяца, добавляя кэш и race-guard
+  (function(){
+    // общий реквест-id (если ранее уже добавили — используем его)
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
+
+    // V5: loadFreeSlots(y, m) -> Promise<{days,gran,tz}>
+    if (typeof window.loadFreeSlots === 'function'){
+      const orig = window.loadFreeSlots;
+      window.loadFreeSlots = async function(y, m, opt){
+        opt = opt || {};
+        const cached = getCache(y,m);
+        if (cached && !opt.force){
+          // синхронизируем глобалы для совместимости
+          window.__GRAN__ = cached.gran;
+          window.__FREE__ = cached.days;
+          return { ok:true, days: cached.days, gran: cached.gran, tz: cached.tz, cached:true };
+        }
+        const my = ++window.__CAL_REQ_ID__;
+        const res = await orig.apply(this, arguments);
+        if (my !== window.__CAL_REQ_ID__) return res; // устарел — ничего не делаем
+        try{
+          if (res && res.days){ setCache(y,m, res.days, res.gran, res.tz); }
+          else if (window.__FREE__){ setCache(y,m, window.__FREE__, window.__GRAN__||30, TZ); }
+        }catch(_){}
+        return res;
+      };
+    }
+
+    // Ранний блок: loadFreeSlotsForMonth(y, m) -> async (заполняет window.__FREE__)
+    if (typeof window.loadFreeSlotsForMonth === 'function'){
+      const orig2 = window.loadFreeSlotsForMonth;
+      window.loadFreeSlotsForMonth = async function(y, m, opt){
+        opt = opt || {};
+        const cached = getCache(y,m);
+        if (cached && !opt.force){
+          window.__GRAN__ = cached.gran;
+          window.__FREE__ = cached.days;
+          return; // из кэша уже всё положили
+        }
+        const my = ++window.__CAL_REQ_ID__;
+        await orig2.apply(this, arguments);
+        if (my !== window.__CAL_REQ_ID__) return; // устарел
+        try{
+          if (window.__FREE__){ setCache(y,m, window.__FREE__, window.__GRAN__||30, TZ); }
+        }catch(_){}
+      };
+    }
+  })();
+
+  // 3) После успешной брони инвалидация кэша и мягкое обновление
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if ((type==='consult_booking' || (data && data.type==='consult_booking')) && res && res.ok){
+          const date = (data && data.date) || (window.scope && (scope._selDate||scope.selDate)) || '';
+          if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)){
+            const ym = { y: date.slice(0,4), m: date.slice(5,7) };
+            invalidateMonth(ym.y, ym.m);
+            // локально вычеркнем занятый старт, если он в __FREE__
+            const t = (data && data.time) || (window.scope && (scope._selTime||scope.selTime));
+            const dur = (data && +data.duration_min) || (window.scope && +scope._durMin) || 30;
+            const step = window.__GRAN__ || 30;
+            if (window.__FREE__ && window.__FREE__[date] && t){
+              const arr = window.__FREE__[date];
+              const idx = arr.indexOf(t);
+              if (idx>=0){
+                const removeCount = Math.max(1, Math.ceil(dur / step));
+                // удаляем непрерывную цепочку шагов
+                for (let i=0;i<removeCount;i++){
+                  const hh = (function(m){ const H=String(Math.floor(m/60)).padStart(2,'0'); const M=String(m%60).padStart(2,'0'); return H+':'+M; })(
+                    (function(s){ const m=s.split(':').map(Number); return m[0]*60+m[1]; })(t) + i*step
+                  );
+                  const j = arr.indexOf(hh); if (j>=0) arr.splice(j,1);
+                }
+                if (!arr.length){ const ym2 = parseYM(); if (ym2) markTailsAndAttachISO(ym2); }
+              }
+            }
+            // мягко перезагрузим месяц (если есть функции)
+            if (typeof window.syncMonthAndDays === 'function') { try{ await window.syncMonthAndDays(); }catch(_){} }
+            else if (typeof window.syncMonth === 'function')    { try{ await window.syncMonth(); }catch(_){} }
+          }
+        }
+      }catch(_){}
+      return res;
+    };
+  })();
+
+  // 4) Первичная отметка хвостов после начальной отрисовки сетки
+  setTimeout(()=>{ const ym = parseYM(); if (ym) markTailsAndAttachISO(ym); }, 50);
+
+  // 5) После переключения месяца — тоже отметим хвосты (перехватываем клики на prev/next)
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')){
+      setTimeout(()=>{ const ym = parseYM(); if (ym) markTailsAndAttachISO(ym); }, 60);
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
 
