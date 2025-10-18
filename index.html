@@ -1,18 +1,3 @@
-
-<style>
-/* Active slot button: blue with white text (scoped) */
-#slots .btn.btn-primary,
-#slotsTime .btn.btn-primary{
-  background: linear-gradient(180deg, #3B82F6 0%, #1D4ED8 100%) !important;
-  color:#fff !important;
-  border-color:#1D4ED8 !important;
-  box-shadow: 0 8px 22px rgba(59,130,246,.35) !important;
-}
-/* Base ghost slot style */
-#slots .btn, #slotsTime .btn{
-  transition: background-color .18s ease, color .18s ease, transform .12s ease;
-}
-</style>
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -796,7 +781,2250 @@ html,body{-webkit-text-size-adjust:100%}
 
   // При подтверждении, если сервер вернёт slot_unavailable — перезагружаем месяц
   const _origApiEvent = window.apiEvent;
-  /* apiEvent removed for consolidation */
+  window.apiEvent = async function(type, payload){
+    const res = await _origApiEvent(type, payload);
+    if(res && res.ok===false && /slot_unavailable/.test(res.error||'')){
+      try{ await syncMonthAndDays(); }catch(_){}
+    }
+    return res;
+  };
+})();
+</script>
+
+<script>
+/* === Calendar × GAS (V5 minimal, robust) === */
+(function(){
+  
+  // Gate calendar interactions by readiness
+  const CAL = document.getElementById('cal');
+  if (CAL){ CAL.dataset.ready = CAL.dataset.ready || "0"; CAL.dataset.busy = "1"; }
+if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
+
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+  const dd2 = n => String(n).padStart(2,'0');
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+
+  function parseYM(){
+    // поддержим разные верстки: #cal .cal-head .mon или .mon
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent || '').trim().toLowerCase(); // "Октябрь 2025"
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if (!m) return null;
+    const stem = m[1].slice(0,3).replace('ё','е');
+    const mm = RU2MM[stem];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  function showError(msg){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    wrap.classList.add('show');
+    wrap.innerHTML = '<div class="muted" style="padding:8px">'+ msg +'</div>';
+  }
+
+  async function loadFreeSlots(y, m){
+    const base = window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK;
+    if (!base) { showError('Нет APP_CONFIG.GAS_WEBHOOK'); return null; }
+
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+    try{
+      const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tg) u.searchParams.set('tg_init', tg);
+      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+    }catch(_){}
+
+    let r, j;
+    try{
+      r = await fetch(u.toString(), { credentials:'omit' });
+      j = await r.json();
+    }catch(e){
+      showError('Ошибка сети при загрузке слотов'); return null;
+    }
+    if (!j || j.ok === false) {
+      showError('Сервер не отдал слоты' + (j && j.error ? `: ${j.error}` : ''));
+      return null;
+    }
+    return j; // { days:{ 'YYYY-MM-DD': ['10:00','10:30',...]}, gran, tz }
+  }
+
+  function applyDays(ym, freeMap){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+
+      const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
+      if (!hasKey) return; // не трогаем, если день не пришёл с сервера
+
+      const arr = (freeMap && freeMap[iso]) || [];
+      if (Array.isArray(arr) && arr.length>0){
+        cell.classList.remove('off','muted');
+        cell.removeAttribute('aria-disabled');
+      } else {
+        cell.classList.add('off','muted');
+        cell.setAttribute('aria-disabled','true');
+      }
+    });
+    }
+
+  function renderSlots(iso, freeMap){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    const arr = (freeMap && freeMap[iso]) || [];
+    wrap.innerHTML = ''; wrap.classList.add('show');
+    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+    arr.forEach(time=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost';
+      b.textContent = time;
+      b.dataset.time = time;
+      b.dataset.iso = iso;
+      b.onclick = async ()=>{
+        qsa('button',wrap).forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        window.scope = window.scope || {}; scope._selTime = time;
+        window.SEL   = window.SEL   || {}; SEL.time = time;
+
+        // HOLD: remove visually and send hold_slot to GAS
+        const dur = (window.SEL && +SEL.duration_min) || (window.scope && +scope._durMin) || 30;
+        setTimeout(()=>{ try{ b.remove(); }catch(_){ } }, 120);
+        try{
+          const res = await (window.apiEvent ? window.apiEvent('hold_slot', { date: iso, time, duration_min: dur }) : Promise.resolve({ok:false}));
+          if (!res || res.ok===false){
+            // refresh month to sync availability
+            if (window.syncMonth) try{ await window.syncMonth(); }catch(_){}
+          } else {
+            // remove from local FREE cache
+            try{
+              const list = (window.__FREE__ && window.__FREE__[iso]) || [];
+              const idx = list.indexOf(time); if (idx>=0) list.splice(idx,1);
+            }catch(_){}
+          }
+        }catch(_){
+          if (window.syncMonth) try{ await window.syncMonth(); }catch(_){}
+        }
+      }; scope._selTime = time;
+        window.SEL   = window.SEL   || {}; SEL.time = time;
+      };
+      wrap.appendChild(b);
+    });
+  }
+
+  async function syncMonth(){
+    const ym = parseYM(); if (!ym) return;
+    if (CAL){ CAL.dataset.busy="1"; CAL.dataset.ready="0"; CAL.dataset.ym = `${ym.y}-${ym.m}`; const grid = CAL.querySelector(".cal-grid"); if (grid) grid.setAttribute("inert",""); }                        // нет заголовка месяца
+    const data = await loadFreeSlots(ym.y, ym.m); if (!data) return;
+    window.__FREE__ = data.days || {};
+    applyDays(ym, window.__FREE__);
+    if (CAL && CAL.dataset.ym === `${ym.y}-${ym.m}`){ CAL.dataset.busy="0"; CAL.dataset.ready="1"; const grid = CAL.querySelector(".cal-grid"); if (grid) grid.removeAttribute("inert"); }
+  }
+
+  // Инициализация (даём календарю отрисоваться)
+  setTimeout(syncMonth, 60);
+
+  // Перелистывание месяцев
+  document.addEventListener('click', e=>{
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) { if (CAL){ CAL.dataset.busy="1"; CAL.dataset.ready="0"; const grid = CAL.querySelector(".cal-grid"); if (grid) grid.setAttribute("inert",""); }
+      setTimeout(syncMonth, 30);
+    }
+  });
+
+  // Клик по дню -> рендерим слоты
+  document.addEventListener('click', e=>{
+    const cell = e.target.closest && e.target.closest('#cal .cal-cell');
+    if (!cell || cell.classList.contains('off')) return;          // закрытый день — игнор
+    const iso = cell.dataset.iso || cell.dataset.date;
+    if (!iso) return;
+    window.scope = window.scope || {}; scope._selDate = iso;      // дай знать остальному коду
+    window.__selDate = iso;
+    renderSlots(iso, window.__FREE__);
+  });
+
+  /* ——— Бридж записи: подставь date/time/format в consult_booking ——— */
+  (function(){
+    if (window.__BOOKING_BRIDGE_V5__) return; window.__BOOKING_BRIDGE_V5__ = true;
+    function pick(){
+      let d = (window.scope && (scope._selDate||scope.selDate)) || '';
+      let t = (window.scope && (scope._selTime||scope.selTime)) || '';
+      let dur = (window.scope && (scope._durMin||scope.durMin)) || 30;
+      const btn = qs('#slots .btn-primary, #slots .active'); if (!t && btn) t = (btn.dataset.time||btn.textContent||'').trim();
+      return { date:d||'', time:t||'', duration_min:dur||30 };
+    }
+    function pickFormat(){
+      const el = qs('.consult-type.btn-primary, .consult-type.active');
+      return (el && el.dataset && el.dataset.type) || (window.SEL&&SEL.type) || (window.scope&&scope._format) || '';
+    }
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      data = data || {};
+      if (type==='consult_booking' || (data && data.type==='consult_booking')){
+        const s = pick();
+        data.date = data.date || s.date;
+        data.time = data.time || s.time;
+        data.duration_min = data.duration_min || s.duration_min;
+        data.format = data.format || pickFormat();
+      }
+      try{ if(!data.tg_init && Telegram && Telegram.WebApp) data.tg_init = Telegram.WebApp.initData; }catch(_){}
+      if (typeof prev === 'function') return prev(type, data);
+      if (typeof window.__postGAS === 'function') return await window.__postGAS(Object.assign({type:type}, data));
+    };
+  })();
+})();
+</script>
+
+<style>
+/* На случай, если стилей нет — сделаем «приглушение» */
+.cal-cell.off { pointer-events:none; }
+.muted { opacity:.5; }
+</style>
+
+<script>
+/* ===== DEV PANEL & AUDIT (включается по ?dev=1 или localStorage.dev=1) ===== */
+(function(){
+  const DEV = /[?&]dev=1/.test(location.search) || localStorage.getItem('dev')==='1';
+  if (!DEV) return;
+  window.__DEV__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = n=>String(n).padStart(2,'0');
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+
+  // ---------- UI ----------
+  const box = document.createElement('div');
+  box.id = 'devPanel';
+  box.innerHTML = `
+    <div class="dev-head">DEV</div>
+    <div class="dev-body">
+      <div class="row">
+        <label>GAS_WEBHOOK</label>
+        <input id="devGas" placeholder="https://script.google.com/macros/s/.../exec">
+      </div>
+      <div class="row">
+        <label>API_KEY (для браузера)</label>
+        <input id="devKey" placeholder="если ALLOW_API_KEY_FALLBACK=true">
+      </div>
+      <div class="row">
+        <button id="devPing">Ping</button>
+        <button id="devSlots">Free Slots</button>
+        <button id="devAudit">Аудит календаря</button>
+      </div>
+      <div class="row">
+        <label>Тест booking:</label>
+        <input id="devContact" placeholder="@username / +7...">
+        <button id="devBook">consult_booking</button>
+      </div>
+      <pre id="devLog"></pre>
+    </div>`;
+  document.body.appendChild(box);
+
+  const $ = id => box.querySelector(id);
+  const log = (m,obj)=>{ const t = new Date().toLocaleTimeString(); const s = typeof obj==='undefined' ? '' : ' ' + JSON.stringify(obj); $('#devLog').textContent += `[${t}] ${m}${s}\n`; };
+  const cfg = window.APP_CONFIG = window.APP_CONFIG || {};
+  $('#devGas').value = cfg.GAS_WEBHOOK || localStorage.getItem('GAS_WEBHOOK') || '';
+  $('#devKey').value = cfg.API_KEY || localStorage.getItem('API_KEY') || '';
+  $('#devContact').value = localStorage.getItem('DEV_CONTACT') || '';
+
+  // сохраняем значения
+  ['devGas','devKey','devContact'].forEach(id=>{
+    $( '#'+id ).addEventListener('change', ()=>{
+      if (id==='devGas'){ cfg.GAS_WEBHOOK = $('#devGas').value; localStorage.setItem('GAS_WEBHOOK', cfg.GAS_WEBHOOK); }
+      if (id==='devKey'){ cfg.API_KEY = $('#devKey').value; localStorage.setItem('API_KEY', cfg.API_KEY); }
+      if (id==='devContact'){ localStorage.setItem('DEV_CONTACT', $('#devContact').value); }
+    });
+  });
+
+  function parseYM(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim().toLowerCase(); // "Октябрь 2025"
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if (!m) return null;
+    const mm = RU2MM[m[1].slice(0,3).replace('ё','е')];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  async function fetchJSON(u){
+    const r = await fetch(u.toString(), { credentials:'omit' });
+    const j = await r.json().catch(()=>null);
+    return { ok:r.ok, status:r.status, data:j };
+  }
+
+  async function ping(){
+    const base = cfg.GAS_WEBHOOK; if(!base){ log('⛔ нет GAS_WEBHOOK'); return; }
+    const u = new URL(base); u.searchParams.set('mode','ping');
+    const {data} = await fetchJSON(u); log('ping', data);
+  }
+
+  async function getFreeSlots(){
+    const base = cfg.GAS_WEBHOOK; if(!base){ log('⛔ нет GAS_WEBHOOK'); return null; }
+    const ym = parseYM(); if(!ym){ log('⛔ не вижу заголовок месяца'); return null; }
+    const first = `${ym.y}-${ym.m}-01`;
+    const last  = `${ym.y}-${ym.m}-${dd2(new Date(+ym.y,+ym.m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+    try{
+      const tgi = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tgi) u.searchParams.set('tg_init', tgi);
+      else if (cfg.API_KEY) u.searchParams.set('key', cfg.API_KEY);
+    }catch(_){}
+    const {data} = await fetchJSON(u);
+    log('free_slots', data);
+    if (data && data.ok) window.__FREE__ = data.days || {};
+    return data;
+  }
+
+  function auditCalendar(){
+    const grid = qs('#cal .cal-grid'); if(!grid){ log('⛔ нет .cal-grid'); return; }
+    const ym = parseYM(); if(!ym){ log('⛔ не вижу месяц/год'); return; }
+    let bad=0, ok=0;
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      const fromSrv = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
+      if (!fromSrv) { cell.style.outline = ''; return; }
+      const arr = window.__FREE__[iso] || [];
+      const shouldOff = !(Array.isArray(arr) && arr.length>0);
+      const isOff = cell.classList.contains('off') || cell.getAttribute('aria-disabled')==='true';
+      if (shouldOff !== isOff){
+        cell.style.outline = '2px solid #e53935'; bad++;
+      } else {
+        cell.style.outline = '2px solid #43a047'; ok++;
+      }
+    });
+    log('Аудит календаря — ок/проблемы', {ok,bad});
+  }
+
+  async function bookTest(){
+    const contact = $('#devContact').value.trim();
+    localStorage.setItem('DEV_CONTACT', contact);
+    // берём выбор из твоего UI/моста
+    const s = (function(){
+      let d = (window.scope && (scope._selDate||scope.selDate)) || '';
+      let t = (window.scope && (scope._selTime||scope.selTime)) || '';
+      let dur = (window.scope && (scope._durMin||scope.durMin)) || 30;
+      const btn = qs('#slots .btn-primary, #slots .active'); if (!t && btn) t = (btn.dataset.time||btn.textContent||'').trim();
+      return { date:d||'', time:t||'', duration_min:dur||30 };
+    })();
+    const payload = { type:'consult_booking', contact, format: (window.scope&&scope._format)||'call' };
+    if (s.date) payload.date = s.date;
+    if (s.time) payload.time = s.time;
+    payload.duration_min = s.duration_min;
+
+    // отдаём через твой apiEvent/bridge, чтобы отловить коллизию слота
+    try{
+      const res = await (window.apiEvent ? window.apiEvent('consult_booking', payload) : Promise.resolve({ok:false, error:'no_apiEvent'}));
+      log('consult_booking →', payload);
+      log('consult_booking ←', res);
+    }catch(e){
+      log('consult_booking error', String(e));
+    }
+  }
+
+  // перехват apiEvent для логов
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      log('→ apiEvent', {type, data});
+      const r = prev ? await prev(type, data) : undefined;
+      log('← apiEvent', r);
+      return r;
+    };
+  })();
+
+  // кнопки
+  $('#devPing').onclick  = ping;
+  $('#devSlots').onclick = async()=>{ const d = await getFreeSlots(); if(d&&d.ok) auditCalendar(); };
+  $('#devAudit').onclick = auditCalendar;
+  $('#devBook').onclick  = bookTest;
+})();
+</script>
+<style>
+#devPanel{position:fixed;right:12px;bottom:12px;z-index:99999;background:#0b1220;color:#e6edf3;border:1px solid #24324a;border-radius:12px;width:320px;font:12px/1.4 system-ui,Segoe UI,Roboto,Arial;padding:0;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+#devPanel .dev-head{padding:8px 10px;background:#111a2b;border-bottom:1px solid #24324a;border-top-left-radius:12px;border-top-right-radius:12px;font-weight:700;letter-spacing:.5px}
+#devPanel .dev-body{padding:8px 10px;max-height:55vh;overflow:auto}
+#devPanel .row{display:flex;gap:6px;align-items:center;margin:6px 0}
+#devPanel label{min-width:110px;color:#8fb0ff}
+#devPanel input{flex:1 1 auto;background:#0f172a;border:1px solid #2f3b59;border-radius:8px;color:#e6edf3;padding:6px 8px}
+#devPanel button{background:#1f6feb;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer}
+#devPanel pre{white-space:pre-wrap;background:#0f172a;border:1px dashed #2b3860;border-radius:8px;padding:6px 8px;margin:6px 0 0;max-height:26vh;overflow:auto}
+</style>
+
+
+<script>
+/* === Duration bridge + slot filtering (не ломая текущую логику) === */
+(function(){
+  if (window.__DURATION_FILTER_V1__) return; window.__DURATION_FILTER_V1__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const toMin = (hhmm)=>{ const m = String(hhmm||'').match(/(\d{1,2}):(\d{2})/); if(!m) return null; return (+m[1])*60 + (+m[2]); };
+  const toHHMM = (m)=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+
+  // ---- 1) Читаем выбранную длительность из UI (разные разметки поддержим) ----
+  function getSelectedDuration() {
+    // популярные варианты: кнопки с data-* или .active, радио, селект
+    const cand =
+      qs('[data-dur].active, [data-duration].active, .dur.btn-primary, .dur.active') ||
+      qs('input[name="duration"]:checked') ||
+      qs('#duration, select[name="duration"]');
+
+    let v = 30;
+    if (cand){
+      if (cand.dataset && cand.dataset.min) v = parseInt(cand.dataset.min,10)||v;
+      else if (cand.dataset && cand.dataset.dur) v = parseInt(cand.dataset.dur,10)||v;
+      else if (cand.value) v = parseInt(cand.value,10)||v;
+      else {
+        const txt = (cand.textContent||'').replace(/\D+/g,'');
+        if (txt) v = parseInt(txt,10)||v;
+      }
+    }
+    // запасной вариант: смотрим в scope/_durMin
+    try{ if (window.scope && +scope._durMin) v = +scope._durMin; }catch(_){}
+    return Math.min(Math.max(v, 15), 240); // 15..240
+  }
+
+  // ---- 2) Прокидываем duration в consult_booking ----
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      data = data || {};
+      if (type==='consult_booking' || (data && data.type==='consult_booking')) {
+        const dur = getSelectedDuration();
+        data.duration_min = data.duration_min || dur;
+        // синхронизируем с твоим scope, чтобы остальной код «видел»
+        window.scope = window.scope || {}; scope._durMin = dur;
+      }
+      if (typeof prev === 'function') return prev(type, data);
+      if (typeof window.__postGAS === 'function') return await window.__postGAS(Object.assign({type:type}, data));
+    };
+  })();
+
+  // ---- 3) Фильтруем старты под выбранную длительность (по непрерывности шагов) ----
+  function filterStartsByDuration(starts, durMin, stepMin){
+    if (!Array.isArray(starts) || !starts.length) return [];
+    const step = Math.max(5, stepMin|| (window.__GRAN__||30));
+    if (durMin <= step) return starts.slice();
+
+    const need = Math.ceil(durMin / step);
+    const minsSet = new Set(starts.map(toMin).filter(m=>m!=null));
+    return starts.filter(t=>{
+      const m = toMin(t); if (m==null) return false;
+      for (let i=0;i<need;i++){
+        if (!minsSet.has(m + i*step)) return false; // не хватает подряд идущих шагов
+      }
+      return true;
+    });
+  }
+
+  // ---- 4) Подхватываем отрисовку слотов и применяем фильтр на лету ----
+  function refilterSlots() {
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    // текущие старты из DOM или из ответа сервера (предпочтительно из сервера)
+    let starts = [];
+    if (window.__selDate && window.__FREE__ && window.__FREE__[window.__selDate]) {
+      starts = window.__FREE__[window.__selDate].slice();
+    } else {
+      // fallback: прочитаем из кнопок
+      starts = qsa('button[data-time],button', wrap)
+        .map(b => (b.dataset.time || b.textContent || '').trim())
+        .filter(Boolean);
+    }
+
+    const dur = getSelectedDuration();
+    const step = window.__GRAN__ || 30;
+    const allowed = new Set(filterStartsByDuration(starts, dur, step));
+    // проставим доступность на кнопках
+    qsa('button', wrap).forEach(b=>{
+      const t = (b.dataset.time || b.textContent || '').trim();
+      if (!t) return;
+      const ok = allowed.has(t);
+      b.classList.toggle('muted', !ok);
+      b.classList.toggle('off', !ok);
+      if (!ok && b.classList.contains('btn-primary')) b.classList.remove('btn-primary','active');
+    });
+
+    if (window.__DEV__){
+      const logEl = document.querySelector('#devLog');
+      const msg = `[slots] duration=${dur}, step=${step}, total=${starts.length}, allowed=${allowed.size}`;
+      if (logEl) logEl.textContent += msg + '\n'; else console.log(msg);
+    }
+  }
+
+  // --- 5) Включаем рефильтр при выборе даты/при смене длительности ---
+  // Клики по слоту/дате уже где-то обрабатываются; мы только подслушаем события.
+  document.addEventListener('click', (e)=>{
+    // смена длительности
+    if (e.target.closest('.dur, [data-dur], [data-duration], input[name="duration"], #duration, select[name="duration"]')) {
+      const dur = getSelectedDuration();
+      window.scope = window.scope || {}; scope._durMin = dur;
+      setTimeout(refilterSlots, 0);
+    }
+    // выбор даты -> после перерендера слотов чуть позже отфильтруем
+    if (e.target.closest('#cal .cal-cell')) {
+      setTimeout(refilterSlots, 30);
+    }
+  });
+
+  // если слоты дорисованы асинхронно другим кодом — подстрахуемся
+  const mo = new MutationObserver((muts)=>{
+    for (const m of muts){
+      if (m.target && (m.target.id==='slots' || m.target.id==='slotsTime')) {
+        setTimeout(refilterSlots, 0);
+        break;
+      }
+    }
+  });
+  const wrap = qs('#slots,#slotsTime'); if (wrap) mo.observe(wrap, { childList:true, subtree:true });
+
+  // начальная попытка (если выбор уже есть)
+  setTimeout(refilterSlots, 300);
+})();
+</script>
+<style>
+/* мягкая деактивация слотов, чтобы было понятно пользователю */
+#slots .off, #slotsTime .off { opacity:.5; }
+</style>
+  
+    
+</head>
+<body>
+
+<script>
+// Telegram WebApp SDK init + name read (runs as early as possible)
+(function(){
+  var tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+  if (!tg) return;
+  try { tg.ready(); tg.expand && tg.expand(); } catch(e){}
+
+  function getDisplayName(){
+    try{
+      var u = (tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : null;
+      if (!u) return null;
+      var full = [u.first_name||'', u.last_name||''].filter(Boolean).join(' ').trim();
+      return full || (u.username ? '@'+u.username : null);
+    }catch(e){ return null; }
+  }
+
+  // Wait a bit in case Telegram fills user with slight delay
+  function awaitUser(cb){
+    var tries = 0, timer = setInterval(function(){
+      var name = getDisplayName();
+      if (name || tries++ > 20){ clearInterval(timer); cb(name || 'Гость'); }
+    }, 150);
+  }
+
+  awaitUser(function(name){
+    // Expose globally so any part of app can use
+    window.__TG_DISPLAY_NAME__ = name;
+    // Update any placeholders in UI if present
+    var el = document.querySelector('[data-tg-name], .profile-name, #tg-user-header .name');
+    if (el) el.textContent = name;
+  });
+})();
+</script>
+
+<canvas id="bg-canvas"></canvas>
+
+<header class="container">
+  <div class="brand-wrap">
+    <div class="logo"></div>
+    <div>
+      <div class="brand">Маркетолог</div>
+      <div class="slogan">Считаем прибыль, а не клики</div>
+    </div>
+  </div>
+</header>
+
+<nav class="container" id="spa-nav"><div class="track"><a class="btn" data-page="home" href="#home">🏠 Главная</a><a class="btn" data-page="services" href="#services">🧩 Услуги</a><a class="btn" data-page="about" href="#about">👩‍💼 Обо мне</a><a class="btn" data-page="faq" href="#faq">❓ Вопросы</a><a class="btn" data-page="bonuses" href="#bonuses">🎁 Бонусы</a><a class="btn" data-page="community" href="#community">🤝 Сообщество</a><a class="btn" data-page="consult" href="#consult">📅 Консультация</a><a class="btn" data-page="invite" href="#invite">🎯 Партнерка</a><span class="bubble" aria-hidden="true"></span></div></nav>
+
+<main class="container">
+
+  <section class="page" id="home">
+
+    <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+
+    <!-- Savings widget -->
+    <div class="grid grid-2 reveal" style="margin-top:14px">
+      <div class="card savings">
+        <div class="h1 reveal">Быстрый <span>расчет прибыли</span> бизнеса</div>
+        <div class="row">
+          <label>Выручка: <strong id="revVal">10 000 000 ₽</strong></label>
+          <input id="rev" type="range" min="500000" max="50000000" step="500000" value="10000000">
+        </div>
+        <div class="row">
+          <label>Эффект оптимизации: <strong id="pctVal">12%</strong></label>
+          <input id="pct" type="range" min="1" max="30" step="1" value="12">
+        </div>
+        <div class="stat">
+          <div class="badge">Было: <span id="oldTax">1 500 000 ₽</span></div>
+          <div class="badge">Стало: <span id="newTax">1 320 000 ₽</span></div>
+        </div>
+        <div>Потенциальная экономия:</div>
+        <div class="big" id="saveCounter">0 ₽</div>
+        <div class="cta"><button class="btn btn-primary confetti" id="ctaCalc">Получить персональный расчёт</button></div>
+      </div>
+<div class="card reveal" style="margin-bottom:12px"><div class="h1 reveal" style="margin-bottom:20px">Как <span>мы</span> работаем</div><div id="flow" style="display:grid;gap:8px"><div class="badge">Шаг 1 · Диагностика</div><div class="badge">Шаг 2 · План оптимизации</div><div class="badge">Шаг 3 · Внедрение</div><div class="badge">Шаг 4 · Контроль и отчёты</div></div><div class="cta" style="margin-top:10px"><button class="btn btn-primary" id="flowNext">Дальше</button><button class="btn btn-ghost" id="flowReset">Сбросить</button></div></div>
+      <div class="card">
+        <div class="h1 reveal" style="margin-bottom:20px">Что <span>делать</span> дальше</div>
+        <ul class="list">
+          <li><span class="dot"></span>Запускаем калькулятор в боте</li>
+          <li><span class="dot"></span>Фиксируем источник «утечек»</li>
+          <li><span class="dot"></span>Формируем пошаговый план</li>
+        </ul>
+        <div class="highlight-banner" style="text-align:left"><strong>Бонус:</strong> мини‑гайд «Как перейти на выгодный режим»</div>
+      </div>
+
+  </section>
+
+  <section class="page" id="services">
+<div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+<div class="card reveal"><h3>Тарифы</h3><div class="cta"><button class="btn btn-primary svcMode" data-mode="month">Месяц</button><button class="btn btn-ghost svcMode" data-mode="year">Год −15%</button></div></div><div class="card price reveal" data-base="30000"><h3>📈 Продвижение на Авито</h3><p class="lead" style="font-size:14px">Ваши объявления будут выходить на первые позиции — поток заявок при минимальном бюджете.</p><div class="big" data-price>30,000 ₽</div></div><div class="card price reveal" data-base="60000"><h3>🎯 Контекстная реклама</h3><p class="lead" style="font-size:14px">Яндекс.Директ и Google Ads: кампании без слива бюджета, под ваши KPI.</p><div class="big" data-price>60,000 ₽</div></div><div class="card price reveal" data-base="45000"><h3>🔍 SEO и сайты (Tilda/MODx)</h3><p class="lead" style="font-size:14px">Сайт‑магнит: оптимизация, структура, тексты под спрос.</p><div class="big" data-price>45,000 ₽</div></div><div class="card price reveal" data-base="55000"><h3>🤖 CRM и чат‑боты</h3><p class="lead" style="font-size:14px">Amo/Bitrix24 + боты: заявки 24/7, ничего не теряется.</p><div class="big" data-price>55,000 ₽</div></div><div class="card price reveal" data-base="40000"><h3>🛒 Маркетплейсы</h3><p class="lead" style="font-size:14px">Карточки под ключ: фото, описание, ключи, продвижение в площадке.</p><div class="big" data-price>40,000 ₽</div></div><div class="card price reveal" data-base="50000"><h3>📊 Аналитика и стратегия</h3><p class="lead" style="font-size:14px">Сквозная аналитика + карта действий на 6–12 мес.</p><div class="big" data-price>50,000 ₽</div></div><div class="card price reveal" data-base="35000"><h3>💬 Репутация и SMM</h3><p class="lead" style="font-size:14px">Образ бренда и работа с отзывами.</p><div class="big" data-price>35,000 ₽</div></div><div class="card price reveal" data-base="38000"><h3>📲 Telegram‑маркетинг</h3><p class="lead" style="font-size:14px">Канал, рассылки, воронки, связка с CRM.</p><div class="big" data-price>38,000 ₽</div></div><div class="card price reveal" data-base="70000"><h3>⚡ Mini‑Apps в Telegram</h3><p class="lead" style="font-size:14px">Калькуляторы, квизы, лид‑формы, интеграции.</p><div class="big" data-price>70,000 ₽</div></div>
+    </div>
+<div class="card reveal" style="margin-bottom:12px">
+  <div class="h1 reveal">Быстрый квиз: <span>что даст</span> наибольшую экономию?</div>
+  <div id="quiz" data-step="0">
+    <div id="q0" class="q">
+      <div class="lead" style="font-size:14px">Выручка в месяц?</div>
+      <div class="cta">
+        <button class="btn btn-ghost quiz-option" data-score="1">до 1 млн</button>
+        <button class="btn btn-ghost quiz-option" data-score="2">1–5 млн</button>
+        <button class="btn btn-ghost quiz-option" data-score="3">5–20 млн</button>
+        <button class="btn btn-ghost quiz-option" data-score="4">20+ млн</button>
+      </div>
+    </div>
+    <div id="q1" class="q" style="display:none">
+      <div class="lead" style="font-size:14px">Доля расходов к выручке?</div>
+      <div class="cta">
+        <button class="btn btn-ghost quiz-option" data-score="1">до 20%</button>
+        <button class="btn btn-ghost quiz-option" data-score="2">20–40%</button>
+        <button class="btn btn-ghost quiz-option" data-score="3">40–60%</button>
+        <button class="btn btn-ghost quiz-option" data-score="4">60%+</button>
+      </div>
+    </div>
+    <div id="q2" class="q" style="display:none">
+      <div class="lead" style="font-size:14px">Есть НДС‑клиенты / входной НДС?</div>
+      <div class="cta">
+        <button class="btn btn-ghost quiz-option" data-score="2">Да, часто</button>
+        <button class="btn btn-ghost quiz-option" data-score="1">Редко/нет</button>
+      </div>
+    </div>
+    <div id="quizResult" style="display:none">
+      <div class="h1" style="font-size:22px">Результат</div>
+      <p class="lead" id="quizText" style="font-size:14px"></p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://t.me/pravuchet_bot?start=get_table" target="_blank" rel="noopener">Запустить калькулятор</a>
+        <button class="btn btn-ghost" id="quizReset">Пройти заново</button>
+      </div>
+    </div>
+  </div>
+</div>    
+
+  </section>
+
+  <section class="page" id="about">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+<div class="grid grid-2 reveal">
+  <div class="card"><h3>Путь</h3><ul class="list">
+    <li><span class="dot"></span>2014 — старт в учёте и 1С</li>
+    <li><span class="dot"></span>2018 — первые автоматизации</li>
+    <li><span class="dot"></span>2022 — ниша e‑commerce</li>
+    <li><span class="dot"></span>2024 — мини‑приложения и боты</li>
+  </ul></div>
+  <div class="card"><h3>Факты</h3><ul class="list">
+    <li><span class="dot"></span>50+ проектов</li>
+    <li><span class="dot"></span>Средняя экономия 12–30%</li>
+    <li><span class="dot"></span>Срок запуска 5–10 дней</li>
+  </ul></div>
+</div>
+
+  </section>
+
+  <section class="page" id="bonuses">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+<div class="grid grid-3">
+      <div class="card tilt reveal">
+        <h3>Регистрация бизнеса</h3>
+        <ul class="list">
+          <li><span class="dot"></span>Подбор ОКВЭД и формы (ИП/ООО)</li>
+          <li><span class="dot"></span>Документы + подача онлайн</li>
+          <li><span class="dot"></span>Подключение 1С и настройка</li>
+        </ul>
+        <div class="cta"><button class="btn btn-primary toast-btn" data-msg="Свяжемся и подготовим документы за 1–2 дня.">Оформить регистрацию</button></div>
+      </div>
+      <div class="card tilt reveal">
+        <h3>Подбор системы налогообложения</h3>
+        <ul class="list">
+          <li><span class="dot"></span>УСН 6% / УСН 15% / Патент / ОСНО</li>
+          <li><span class="dot"></span>Сравнение по данным</li>
+          <li><span class="dot"></span>Рекомендация за 10 минут</li>
+        </ul>
+        <div class="cta"><a class="btn btn-primary" href="https://t.me/pravuchet_bot?start=mode" target="_blank" rel="noopener">Подобрать режим</a></div>
+      </div>
+      <div class="card tilt reveal">
+        <h3>Экспресс‑аудит</h3>
+        <ul class="list">
+          <li><span class="dot"></span>«Рентген» финансов</li>
+          <li><span class="dot"></span>Убыточные направления</li>
+          <li><span class="dot"></span>Список быстрых правок</li>
+        </ul>
+        <div class="cta"><a class="btn btn-primary" href="https://t.me/pravuchet_bot?start=audit" target="_blank" rel="noopener">Получить экспресс‑аудит</a></div>
+      </div>
+  <div class="card">
+    <h3>Колесо призов сообщества</h3>
+    <p class="lead" style="font-size:14px">Разыгрываем консультацию/шаблоны каждую неделю среди активных.</p>
+    <div class="cta"><button class="btn btn-primary" id="spin">Крутить 🎡</button></div>
+    <div id="spinRes" class="lead" style="font-size:14px; margin-top:8px"></div>
+  </div>
+  <div class="grid grid-3 reveal" style="margin-top:12px">
+
+    </div>
+
+</div>
+
+  </section>
+
+  <section class="page" id="faq">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+      <div class="card tilt reveal"><h3>Сколько занимает экспресс‑аудит?</h3><p class="lead" style="font-size:14px">Обычно 1–2 дня. Быстрые правки — сразу.</p></div>
+      <div class="card tilt reveal"><h3>Реально ли подобрать режим за 5 минут?</h3><p class="lead" style="font-size:14px">Да. Нужны выручка, расходы и ФОТ.</p></div>
+    </div>
+  
+<div class="card reveal" style="margin-top:12px">
+  <h3>Быстрые ответы</h3>
+  <div class="cta">
+    <button class="btn btn-ghost copy" data-text="Подбор режима за 5 минут в мини‑приложении.">Скопировать ✂️ «Как быстро?»</button>
+    <button class="btn btn-ghost copy" data-text="Да, работаем с Ozon/WB: комиссии, логистика, возвраты.">Скопировать ✂️ «Маркетплейсы?»</button>
+  </div>
+  <div class="cta">
+    <input id="faqSearch" placeholder="Найти ответ…" style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.04); color:#fff">
+    <button class="btn btn-primary" id="faqDoSearch">Искать</button>
+  </div>
+  <div id="faqResult" class="lead" style="font-size:14px; margin-top:8px; color:#a7acc2"></div>
+</div>
+
+  </section>
+
+</main>
+
+  <section class="page" id="community">
+
+    <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+ <div class="card">
+    <h3>Хайлайт недели</h3>
+    <ul class="list">
+      <li><span class="dot"></span>Самая активная тема — НДС на маркетплейсах</li>
+      <li><span class="dot"></span>Лучший ответ — @you (гайд по УСН 15%)</li>
+      <li><span class="dot"></span>Встреча в четверг, 19:00</li>
+    </ul>
+  </div>
+    </div>
+  </div>
+  <div class="card" style="display:grid; place-items:center">
+    <div style="position:relative; width:140px; height:140px">
+      <svg viewBox="0 0 120 120" width="140" height="140">
+        <circle cx="60" cy="60" r="52" stroke="rgba(255,255,255,.12)" stroke-width="12" fill="none"/>
+        <circle id="ring" cx="60" cy="60" r="52" stroke="url(#g1)" stroke-width="12" fill="none"
+          stroke-dasharray="327" stroke-dashoffset="327" stroke-linecap="round" transform="rotate(-90 60 60)"/>
+        <defs>
+          <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="var(--mint)"/>
+            <stop offset="1" stop-color="var(--primary)"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <div id="ringText" style="position:absolute; inset:0; display:grid; place-items:center; font-weight:800">0%</div>
+    </div>
+    <div class="lead" style="font-size:12px; margin-top:8px">Прогресс челленджа недели</div>
+  </div>
+</div>
+ <div class="card">
+    <h3>Статистика сообщества</h3>
+    <div class="grid grid-3" style="gap:12px">
+      <div class="card" style="text-align:center">
+        <div class="big" data-count="137" data-suffix="">0</div>
+        <div class="lead" style="font-size:12px">участников онлайн</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="big" data-count="42" data-suffix="">0</div>
+        <div class="lead" style="font-size:12px">ответов за неделю</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="big" data-count="19" data-suffix="">0</div>
+        <div class="lead" style="font-size:12px">новых гайдов</div>
+      </div>
+
+
+  </section>
+
+</main>
+
+  <section class="page" id="consult">
+    <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <h3>Выберите формат</h3>
+        <div class="cta">
+          <button class="btn btn-primary consult-type" data-type="call">📞 Звонок</button>
+          <button class="btn btn-ghost consult-type" data-type="zoom">💻 Zoom</button>
+          <button class="btn btn-ghost consult-type" data-type="office">🏢 Офис</button>
+        </div>
+        <div class="highlight-banner" id="tzInfo">Часовой пояс: …</div>
+        <div class="savings">
+      </div>
+    </div>          
+<div class="card" style="background:rgba(255,255,255,.04)">
+  <div class="h1" style="font-size:18px;margin:0 0 8px">Календарь</div>
+  <div id="cal" class="calendar"></div>
+</div>
+<div class="cta" style="margin-top:10px">
+  <span class="badge-pill">Выберете длительность консультации:</span>
+  <button class="btn btn-primary dur" data-min="30">30 мин</button>
+  <button class="btn btn-ghost dur" data-min="60">60 мин</button>
+  <button class="btn btn-ghost dur" data-min="90">90 мин</button>
+</div>
+<div style="margin-top:10px">Свободные слоты:<div id="slots" class="cta" style="margin-top:8px"></div></div>
+</div>
+          <div class="row">
+            <label>:</label>
+            <input id="contact" placeholder="@username или +7…"
+              style="padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.04); color:#fff">
+          </div>
+          <div class="cta">
+            <button class="btn btn-primary" id="confirmConsult">Подтвердить</button>
+            <a class="btn btn-ghost" id="icsBtn" download="consult.ics" style="display:none">Добавить в календарь</a>
+          </div>
+        </div>
+      </div>
+      <div class="card reveal">
+        <h3>Как проходит консультация</h3>
+        <ul class="list">
+          <li><span class="dot"></span>15–20 минут диагностика задач</li>
+          <li><span class="dot"></span>Разбор цифр и быстрых гипотез</li>
+          <li><span class="dot"></span>Фиксация плана на 1–2 недели</li>
+        </ul>
+        <div class="highlight-banner">Если не получите пользу — вернём деньги за первую сессию</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="invite">
+        <div class="h1 reveal">Покажем, где утекают деньги и <span>дадим план действий</span> с понятной экономией</div>
+    <p class="lead reveal">❗️ <strong>Если по итогам не станет ясно</strong>, как улучшить результат — дарим 60 минут консультации бесплатно.</p>
+
+    <!-- KPI marquee -->
+    <div class="kpi-strip reveal">
+      <div class="kpi-track" id="kpiTrack">
+        <div class="kpi">📈 LTV <span class="v" id="k1">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v" id="k2">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+
+        <div class="kpi">📈 LTV <span class="v">+0%</span></div>
+        <div class="kpi">💰 Экономия налогов <span class="v">0 ₽</span></div>
+        <div class="kpi">🕒 Срок внедрения <span class="v">5–10 дн</span></div>
+        <div class="kpi">🧾 Автомат. отчёты <span class="v">✓</span></div>
+      </div>
+    </div>
+    <div class="grid grid-2">
+      <div class="card reveal">
+        <h3>Твоя реферальная ссылка</h3>
+        <div class="cta">
+          <input id="refLink" readonly style="flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.04); color:#fff">
+          <button class="btn btn-primary" id="copyRef">Скопировать</button>
+          <button class="btn btn-ghost" id="shareRef">Поделиться</button>
+        </div>
+        <div class="highlight-banner">За каждого активного друга — бонусы и приоритетные ответы</div>
+        <div class="cta"><button class="btn btn-ghost" id="simulateRef">+1 приглашение (демо)</button></div>
+      </div>
+      <div class="card reveal">
+        <h3>Таблица лидеров</h3>
+        <div id="leaders" class="list"></div>
+        <div class="cta" style="margin-top:10px">
+          <button class="btn btn-primary" id="resetBoard">Сбросить демо‑данные</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+<footer>© 2025 • Информационный сервис. Не является налоговой консультацией.</footer>
+
+<!-- Onboarding -->
+<div class="onb" id="onb">
+  <div class="box">
+    <div class="h1" style="font-size:19px">Добро пожаловать! 👋</div>
+    <div class="steps">
+      <div class="step"><div class="num">1</div><div>Нажмите <b>📊 Калькулятор</b> — за 5 минут увидите, где экономия.</div></div>
+      <div class="step"><div class="num">2</div><div>Откройте <b>Услуги</b> — там быстрые шаги по регистрации и аудиту.</div></div>
+      <div class="step"><div class="num">3</div><div>Нажмите на кнопки — появятся подсказки и тосты с советами.</div></div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-ghost" id="onbLater">Позже</button>
+      <button class="btn btn-primary" id="onbGo">Погнали</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toasts & Console -->
+<div class="toasts" id="toasts"></div>
+<button class="btn btn-ghost console-toggle">🔧 Профиль</button>
+<div class="console-panel" id="consolePanel"></div>
+
+<script>
+
+// === Globals & safe helpers ===
+window.ALLOW_DRAG = (function(){ try { return matchMedia('(pointer: coarse)').matches; } catch(e){ return false; } })();
+function fmtRUR(n){ return (n||0).toLocaleString('ru-RU') + ' ₽'; }
+
+
+// === v14 Router helpers ===
+function __pickInitialPage(){
+  const url = new URL(location.href);
+  let page = (url.searchParams.get('page')||'').trim();
+  if(!page && location.hash) page = location.hash.replace('#','').trim();
+  if(!page){
+    page = (url.searchParams.get('tgWebAppStartParam')||url.searchParams.get('startapp')||url.searchParams.get('start_param')||'').trim();
+  }
+  if(!page || !document.getElementById(page)) page = 'home';
+  return page;
+}
+function __updateURL(page){
+  try{
+    const u = new URL(location.href);
+    u.searchParams.set('page', page);
+    history.replaceState(null, '', u.pathname + u.search + '#' + page);
+  }catch(e){ location.hash = page; }
+}
+
+
+// ===== In-page console (disabled in v23) =====
+(function(){
+  // Keep the toggle working for profile/panel later; no log hooking
+  const panel = document.getElementById('consolePanel');
+  const btn = document.querySelector('.console-toggle');
+  if(btn && panel){
+    btn.addEventListener('click', ()=>{
+      panel.style.display='block'; panel.classList.toggle('open');
+    });
+  } //
+})();
+
+// ===== Nav: robust clicks + drag threshold + keep carousel look =====
+(function(){
+  const nav = document.getElementById('spa-nav');
+  const track = nav.querySelector('.track');
+  const pages = document.querySelectorAll('section.page');
+
+  // Expose showPage
+  window.__showPage = function(id){
+    pages.forEach(p=>p.classList.toggle('active', p.id===id));
+    track.querySelectorAll('[data-page]').forEach(el=>el.classList.toggle('active', el.getAttribute('data-page')===id));
+    if (window.__centerNavActive) window.__centerNavActive();
+    console.log('page_view', {page:id});
+  };
+
+  // Delegate clicks (desktop-safe), prevent ghost clicks after drag
+  let dragged = false;
+  track.addEventListener('click', (e)=>{
+    if (dragged) { dragged = false; return; }
+    const a = e.target.closest('[data-page]');
+    if(!a) return;
+    e.preventDefault();
+    __showPage(a.getAttribute('data-page')); __updateURL(a.getAttribute('data-page'));
+    history.replaceState(null,'','#'+a.getAttribute('data-page'));
+  });
+
+  // Drag scroll with threshold
+  let isDown=false, sx=0, sl=0;
+  track.addEventListener('pointerdown', (e)=>{ if (!ALLOW_DRAG) return;
+    isDown=true; dragged=false; sx=e.clientX; sl = track.scrollLeft; track.setPointerCapture(e.pointerId);
+  });
+  track.addEventListener('pointermove', (e)=>{ if (!ALLOW_DRAG) return;
+    if(!isDown) return;
+    const dx = e.clientX - sx;
+    if (Math.abs(dx) > 6) dragged = true;
+    track.scrollLeft = sl - dx;
+  });
+  track.addEventListener('pointerup', ()=>{ isDown=false; });
+
+  // Keyboard support
+  track.querySelectorAll('[data-page]').forEach(a=>{
+    a.setAttribute('tabindex','0');
+    a.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' || e.key===' '){
+        e.preventDefault();
+        __showPage(a.getAttribute('data-page')); __updateURL(a.getAttribute('data-page'));
+      }
+    });
+  });
+
+  const initial = (window.__pickInitialPage ? __pickInitialPage() : (location.hash||'#home').replace('#','')||'home'); __showPage(initial);
+__updateURL(initial);
+})();
+
+
+// ===== Nav bubble & carousel logic =====
+(function(){
+  const nav = document.getElementById('spa-nav');
+  const track = nav.querySelector('.track');
+  const links = [...track.querySelectorAll('[data-page]')];
+  const bubble = track.querySelector('.bubble');
+  
+  const ALLOW_DRAG = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+function moveBubble(){
+    const a = track.querySelector('.btn.active') || links[0];
+    if(!a) return;
+    const r = a.getBoundingClientRect();
+    const nr = track.getBoundingClientRect();
+    bubble.style.left = (a.offsetLeft - track.scrollLeft + 6) + 'px';
+    bubble.style.width = r.width + 'px';
+  }
+  function centerActive(){
+    const a = track.querySelector('.btn.active'); if(!a) return;
+    a.scrollIntoView({behavior:'smooth', inline:'center', block:'nearest'});
+    setTimeout(moveBubble, 220);
+  }
+  window.__centerNavActive = centerActive;
+  // delegated clicks + drag threshold
+  let isDown=false, sx=0, sl=0, moved=false;
+  track.addEventListener('pointerdown', (e)=>{ if (!ALLOW_DRAG) return;isDown=true;moved=false;sx=e.clientX;sl = track.scrollLeft;track.setPointerCapture(e.pointerId)});
+  track.addEventListener('pointermove', (e)=>{ if (!ALLOW_DRAG) return; if(!isDown) return; const dx=e.clientX-sx; if(Math.abs(dx)>6) moved=true; track.scrollLeft = sl-dx; moveBubble();});
+  track.addEventListener('pointerup', ()=>{isDown=false});
+  track.addEventListener('click', (e)=>{ if (ALLOW_DRAG && moved) { moved=false; return; } const a=e.target.closest('[data-page]'); if(!a) return; e.preventDefault(); show(a.getAttribute('data-page')); history.replaceState(null,'','#'+a.getAttribute('data-page')); });
+  track.addEventListener('scroll', ()=>{ // update scaling + bubble on scroll
+    requestAnimationFrame(()=>{ scaleItems(); moveBubble(); });
+  }, {passive:true});
+  window.addEventListener('resize', ()=>{ scaleItems(); moveBubble(); });
+  // scaling like before
+  function scaleItems(){
+    const rect = nav.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    links.forEach(a=>{
+      const r = a.getBoundingClientRect();
+      const ax = r.left + r.width/2;
+      const d = Math.abs(ax - cx);
+      const k = Math.max(0.9, 1.0 - d / (rect.width*0.9));
+      a.style.transform = `scale(${k.toFixed(3)})`;
+      a.style.opacity = String(0.65 + (k-0.9)*2.4);
+    });
+  }
+  // expose show (reusing old one if exists)
+  window.show = window.show || function(id){
+    document.querySelectorAll('section.page').forEach(p=>p.classList.toggle('active', p.id===id));
+    links.forEach(el=>el.classList.toggle('active', el.getAttribute('data-page')===id));
+    centerActive();
+    console.log('page_view', {page:id});
+  };
+  const initial = (window.__pickInitialPage ? __pickInitialPage() : (location.hash||'#home').replace('#','')||'home'); show(initial);
+__updateURL(initial);
+setTimeout(()=>{ scaleItems(); moveBubble(); }, 60);
+})();
+
+// ===== Background particles (canvas) =====
+(function(){
+  const c = document.getElementById('bg-canvas');
+  const ctx = c.getContext('2d');
+  let w, h, particles;
+  function resize(){
+    w = c.width = innerWidth; h = c.height = innerHeight;
+    particles = Array.from({length: Math.min(120, Math.floor(w*h/16000))}, ()=>({
+      x: Math.random()*w, y: Math.random()*h,
+      r: Math.random()*2 + 0.5,
+      vx: (Math.random()-.5)*0.4,
+      vy: (Math.random()-.5)*0.4,
+      a: Math.random()
+    }));
+  }
+  function tick(){
+    ctx.clearRect(0,0,w,h);
+    for (const p of particles){
+      p.x += p.vx; p.y += p.vy;
+      if (p.x<0||p.x>w) p.vx*=-1;
+      if (p.y<0||p.y>h) p.vy*=-1;
+      ctx.globalAlpha = 0.5 + 0.5*Math.sin(p.a+=0.02);
+      const g = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r*4);
+      g.addColorStop(0,'rgba(61,224,197,.35)');
+      g.addColorStop(1,'rgba(123,91,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r*4,0,Math.PI*2); ctx.fill();
+    }
+    requestAnimationFrame(tick);
+  }
+  addEventListener('resize', resize, {passive:true});
+  resize(); tick();
+  console.log('particles:init');
+})();
+
+// ===== Scroll reveal =====
+(function(){
+  const obs = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
+  }, {threshold: 0.12});
+  document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
+})();
+
+// ===== Magnetic buttons =====
+(function(){
+  const strength = 22;
+  document.querySelectorAll('.magnetic').forEach(btn=>{
+    btn.addEventListener('mousemove', e=>{
+      const r = btn.getBoundingClientRect();
+      const x = e.clientX - (r.left + r.width/2);
+      const y = e.clientY - (r.top + r.height/2);
+      btn.style.transform = `translate(${x/strength}px, ${y/strength}px)`;
+    });
+    btn.addEventListener('mouseleave', ()=> btn.style.transform = '');
+  });
+})();
+
+// === Bonuses: spin wheel (single & deduped) ===
+(function(){
+  const section = document.getElementById('bonuses'); if (!section) return;
+  const btn0 = section.querySelector('#spin');
+  const out  = section.querySelector('#spinRes');
+  if (!btn0 || !out) return;
+
+  // 1) Жёстко снимаем ВСЕ старые слушатели с кнопки
+  const btn = btn0.cloneNode(true);
+  btn0.replaceWith(btn);
+
+  // 2) Синглтон-анонс приза (не даст показать тост дважды)
+  const announcePrize = (() => {
+    let locked = false, timer;
+    return (text) => {
+      if (locked) return;
+      locked = true;
+      try { showToast('Поздравляю!', text); } catch(e){}
+      clearTimeout(timer);
+      timer = setTimeout(() => { locked = false; }, 1500);
+    };
+  })();
+
+  // 3) Само вращение
+  const prizes = [
+    '🎁 Шаблон «Оффер»',
+    '📘 Чек-лист аудита',
+    '💬 +30 мин консультации',
+    '🧮 Доступ к калькулятору PRO',
+    '⭐ Приоритетный разбор'
+  ];
+
+  let busy = false;
+  btn.addEventListener('click', () => {
+    if (busy) return;
+    busy = true;
+    out.textContent = 'Крутим…';
+
+    const total = 1800 + Math.floor(Math.random() * 900);
+    const t0 = performance.now();
+
+    const tick = (t) => {
+      if (t - t0 >= total) {
+        const win = prizes[Math.floor(Math.random() * prizes.length)];
+        out.textContent = 'Выпало: ' + win;
+        announcePrize(win);       // ← тост гарантированно один раз
+        busy = false;
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+})();
+
+// ===== Tilt cards =====
+(function(){
+  const max = 10;
+  document.querySelectorAll('.tilt').forEach(card=>{
+    card.addEventListener('mousemove', e=>{
+      const r = card.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width - 0.5;
+      const py = (e.clientY - r.top) / r.height - 0.5;
+      card.style.transform = `rotateY(${px*max}deg) rotateX(${ -py*max}deg) translateY(-6px)`;
+    });
+    card.addEventListener('mouseleave', ()=> card.style.transform = '');
+  });
+})();
+
+// ===== Ripple + Confetti =====
+(function(){
+  // ripple
+  document.body.addEventListener('click', function(e){
+    const t = e.target.closest('.btn');
+    if(!t) return;
+    const r = document.createElement('span');
+    const size = Math.max(t.clientWidth, t.clientHeight);
+    const rect = t.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    r.style.cssText = `position:absolute; left:0; top:0; width:${size}px; height:${size}px; border-radius:50%;
+      transform:translate(${x - size/2}px, ${y - size/2}px);
+      background:rgba(255,255,255,.25); pointer-events:none; animation:ripple .6s ease-out`;
+    t.appendChild(r); setTimeout(()=>r.remove(), 600);
+  });
+  const style = document.createElement('style');
+  style.textContent = `@keyframes ripple{from{transform:scale(.2);opacity:.7}to{transform:scale(1.8);opacity:0}}`;
+  document.head.appendChild(style);
+
+  // confetti
+  document.querySelectorAll('.confetti').forEach(btn=>btn.addEventListener('click', (e)=>{
+    e.preventDefault();
+    runConfetti(e.clientX, e.clientY);
+    showToast('Готово!', 'Отправим чек‑лист и заявку в течение дня.');
+  }));
+  function runConfetti(x,y){
+    const c = document.createElement('canvas');
+    c.width = innerWidth; c.height = innerHeight;
+    Object.assign(c.style,{position:'fixed',left:0,top:0,pointerEvents:'none',zIndex:999});
+    document.body.appendChild(c);
+    const ctx = c.getContext('2d');
+    const N = 140, P = [];
+    for(let i=0;i<N;i++){
+      P.push({
+        x, y, vx:(Math.random()-0.5)*6, vy:Math.random()*-6-2,
+        g:0.2+Math.random()*0.2, s:4+Math.random()*5, r:Math.random()*Math.PI,
+        col: `hsl(${Math.random()*360},90%,60%)`
+      });
+    }
+    let t = 0;
+    (function tick(){
+      ctx.clearRect(0,0,c.width,c.height);
+      P.forEach(p=>{
+        p.vy += p.g; p.x += p.vx; p.y += p.vy; p.r += 0.08;
+        ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.r);
+        ctx.fillStyle = p.col; ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s);
+        ctx.restore();
+      });
+      t++; if (t<180) requestAnimationFrame(tick); else c.remove();
+    })();
+  }
+})();
+
+// ===== Toasts =====
+function showToast(title, msg, timeout=3500){
+  const box = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = `<div class="t">${title}</div><div class="m">${msg||''}</div>`;
+  box.appendChild(t);
+  setTimeout(()=>{ t.style.opacity='0'; t.style.transform='translateY(-6px)'; }, timeout);
+  setTimeout(()=> t.remove(), timeout+600);
+}
+document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()=>showToast('Заявка', b.dataset.msg)));
+
+
+// === Community: counters & ring progress ===
+(function(){
+  const host = document.getElementById('community'); if(!host) return;
+  host.querySelectorAll('.big[data-count]').forEach(el=>{
+    const target = parseInt(el.getAttribute('data-count'),10)||0;
+    const suffix = el.getAttribute('data-suffix')||'';
+    let cur = 0;
+    const step = Math.max(1, Math.round(target/50));
+    const tick = ()=>{
+      cur = Math.min(target, cur+step);
+      el.textContent = cur.toLocaleString('ru-RU') + suffix;
+      if(cur < target) requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  const ring = host.querySelector('#ring');
+  const txt  = host.querySelector('#ringText');
+  if(ring && txt){
+    const full = 327;
+    let val = 0, target = 62;
+    const anim = ()=>{
+      val = Math.min(target, val+2);
+      ring.style.strokeDashoffset = String(full - full*val/100);
+      txt.textContent = val + '%';
+      if(val < target) requestAnimationFrame(anim);
+    };
+    anim();
+  }
+})();
+
+// ===== KPI counters (animated) =====
+(function(){
+  const k1 = document.getElementById('k1');
+  const k2 = document.getElementById('k2');
+  let v1=0, v2=0;
+  function step(){
+    v1 = Math.min(35, v1 + 1);
+    v2 = Math.min(1500000, v2 + Math.round(50000*Math.random()+20000));
+    k1.textContent = `+${v1}%`;
+    k2.textContent = v2.toLocaleString('ru-RU') + ' ₽';
+    if (v1<35 || v2<1500000) requestAnimationFrame(step);
+  }
+  step();
+})();
+
+
+// === Services tariff toggle (Месяц/Год −15%) ===
+(function(){
+  const box = document.getElementById('services'); if(!box) return;
+  const btns = box.querySelectorAll('.svcMode');
+  const cards = box.querySelectorAll('.card.price[data-base]');
+  if(!btns.length || !cards.length) return;
+  let mode = 'month';
+  function apply(){
+    cards.forEach(c=>{
+      const base = parseInt(c.getAttribute('data-base'),10) || 0;
+      const priceNode = c.querySelector('[data-price]');
+      if(!priceNode) return;
+      if(mode==='month'){
+        priceNode.textContent = fmtRUR(base);
+      }else{
+        const y = Math.round(base*12*0.85);
+        priceNode.textContent = fmtRUR(y) + ' / 12 мес.';
+      }
+    });
+    btns.forEach(b=>{
+      const is = b.getAttribute('data-mode') === mode;
+      b.classList.toggle('btn-primary', is);
+      b.classList.toggle('btn-ghost', !is);
+      b.setAttribute('aria-pressed', is ? 'true' : 'false');
+    });
+  }
+  btns.forEach(b=> b.addEventListener('click', ()=>{ mode = b.getAttribute('data-mode'); apply(); }));
+  apply();
+})();
+
+// ===== Savings widget logic =====
+(function(){
+  const rev = document.getElementById('rev');
+  const pct = document.getElementById('pct');
+  const revVal = document.getElementById('revVal');
+  const pctVal = document.getElementById('pctVal');
+  const oldTax = document.getElementById('oldTax');
+  const newTax = document.getElementById('newTax');
+  const saveCounter = document.getElementById('saveCounter');
+
+  function fmt(n){ return n.toLocaleString('ru-RU') + ' ₽'; }
+  function animateTo(el, target){
+    const start = parseInt((el.textContent||'0').replace(/[^\d]/g,''))||0;
+    const dur = 600; const t0 = performance.now();
+    function tick(t){
+      const k = Math.min(1, (t-t0)/dur);
+      const val = Math.round(start + (target-start)*k);
+      el.textContent = fmt(val);
+      if(k<1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+  function recalc(){
+    const R = +rev.value; const P = +pct.value/100;
+    revVal.textContent = R.toLocaleString('ru-RU')+' ₽';
+    pctVal.textContent = Math.round(P*100)+'%';
+    // простая модель: "старые налоги" = 15% от выручки, "новые" = 15%*(1-P)
+    const oldT = Math.round(R*0.15);
+    const newT = Math.round(oldT*(1-P));
+    const save = oldT - newT;
+    oldTax.textContent = fmt(oldT);
+    newTax.textContent = fmt(newT);
+    animateTo(saveCounter, save);
+  }
+  rev.addEventListener('input', recalc);
+  pct.addEventListener('input', recalc);
+  recalc();
+  document.getElementById('ctaCalc').addEventListener('click', ()=>showToast('Расчёт отправлен', 'Мы уточним детали и вернёмся с рекомендацией.'));
+})();
+
+
+
+// === Consultation: format + duration + slots ===
+(function(){
+  const scope = document.getElementById('consult'); if(!scope) return;
+  const types = scope.querySelectorAll('.consult-type');
+  let ctype = 'call';
+  types.forEach(b=> b.addEventListener('click', ()=>{
+    ctype = b.getAttribute('data-type');
+    types.forEach(x=>{
+      const on = x===b;
+      x.classList.toggle('btn-primary', on);
+      x.classList.toggle('btn-ghost', !on);
+    });
+  }));
+  const durs = scope.querySelectorAll('.dur');
+  let dmin = 30;
+  function markDur(btn){
+    durs.forEach(x=>{
+      const on = x===btn;
+      x.classList.toggle('btn-primary', on);
+      x.classList.toggle('btn-ghost', !on);
+    });
+  }
+  durs.forEach(b=> b.addEventListener('click', ()=>{ dmin = +b.getAttribute('data-min'); markDur(b); renderSlots(); }));
+  const def = scope.querySelector('.dur[data-min="30"]'); if(def){ markDur(def); }
+  const slotsEl = scope.querySelector('#slots');
+  const calendar = scope.querySelector('.calendar, #cal, .date-grid, .days');
+  function showSlots(){ if(slotsEl) slotsEl.classList.add('show'); }
+  if(calendar){
+    calendar.addEventListener('click', (e)=>{
+      const day = e.target.closest('button, .cal-cell, .day');
+      if(!day) return;
+      calendar.querySelectorAll('.selected,.sel').forEach(x=>x.classList.remove('selected','sel'));
+      day.classList.add('selected'); day.classList.add('sel');
+      showSlots(); renderSlots();
+    });
+  } else {
+    durs.forEach(b=> b.addEventListener('click', ()=>{ showSlots(); renderSlots(); }));
+  }
+
+  function renderSlots_DEPRECATED(){
+    if(!slotsEl) return;
+    slotsEl.innerHTML = '';
+    const start = 10, end = 18;
+    for(let h=start; h<=end; h++){
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost';
+      btn.textContent = String(h).padStart(2,'0') + ':00 (' + dmin + ' мин)';
+      btn.addEventListener('click', ()=>{
+        slotsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('btn-primary'));
+        btn.classList.add('btn-primary'); btn.classList.remove('btn-ghost');
+        scope._selTime = btn.textContent;
+      });
+      slotsEl.appendChild(btn);
+    }
+  }
+  /* render later after date is chosen */
+})();
+
+// ===== Consultation: calendar + slots =====
+(function(){
+  const calEl = document.getElementById('cal');
+  if(!calEl) return;
+  const slotsEl = document.getElementById('slots');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  document.getElementById('tzInfo').textContent = 'Часовой пояс: ' + tz;
+
+  let selDate = null;
+  function buildCalendar(monthOffset=0){
+    const today = new Date();
+    const base = new Date(today.getFullYear(), today.getMonth()+monthOffset, 1);
+    const year = base.getFullYear(), month = base.getMonth();
+    const start = new Date(year, month, 1);
+    const startDay = (start.getDay()+6)%7; // 0=Mon
+    const daysInMonth = new Date(year, month+1, 0).getDate();
+    const daysPrev = new Date(year, month, 0).getDate();
+    // header
+    calEl.innerHTML = '<div class="cal-head"><button class="btn btn-ghost" id="prevM">←</button><div class="mon">'+base.toLocaleString("ru-RU",{month:"long", year:"numeric"})+'</div><button class="btn btn-ghost" id="nextM">→</button></div>';
+    // weekdays
+    const grid = document.createElement('div'); grid.className='cal-grid';
+    ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].forEach(d=>{
+      const c = document.createElement('div'); c.className='cal-dow'; c.textContent=d; grid.appendChild(c);
+    });
+    // prev month days
+    for(let i=startDay-1; i>=0; i--){
+      const n = daysPrev - i;
+      const c = document.createElement('div'); c.className='cal-cell muted'; c.textContent=n; grid.appendChild(c);
+    }
+    // current month
+    for(let d=1; d<=daysInMonth; d++){
+      const date = new Date(year, month, d);
+      const c = document.createElement('div'); c.className='cal-cell'; c.textContent=d;
+      if(date < new Date(today.getFullYear(), today.getMonth(), today.getDate())){ c.classList.add('off'); }
+      c.onclick = ()=>{ selDate = date; grid.querySelectorAll('.cal-cell').forEach(x=>x.classList.remove('sel')); c.classList.add('sel'); renderSlots(); };
+      grid.appendChild(c);
+    }
+    // next fillers
+    while(grid.children.length % 7 !== 0){
+      const c = document.createElement('div'); c.className='cal-cell muted'; c.textContent=''; grid.appendChild(c);
+    }
+    calEl.appendChild(grid);
+    // nav
+    calEl.querySelector('#prevM').onclick = ()=> buildCalendar(monthOffset-1);
+    calEl.querySelector('#nextM').onclick = ()=> buildCalendar(monthOffset+1);
+  }
+
+  function renderSlots_DEPRECATED(){
+    slotsEl.innerHTML='';
+    if(!selDate) return;
+    const start=10, end=19; // 10-19
+    for(let h=start; h<=end; h++){
+      const t=String(h).padStart(2,'0')+':00';
+      const b=document.createElement('button'); b.className='btn btn-ghost'; b.textContent=t;
+      b.onclick=()=>{ slotsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('btn-primary')); b.classList.add('btn-primary'); saveSelection(t); };
+      slotsEl.appendChild(b);
+    }
+  }
+
+  function saveSelection(time){
+    localStorage.setItem('consult_selected', JSON.stringify({date: selDate.toISOString().slice(0,10), time}));
+    showToast('Слот выбран', new Date(selDate.getTime()).toLocaleDateString('ru-RU') + ' ' + time);
+  }
+
+  buildCalendar(0);
+})();
+
+// ===== Onboarding =====
+(function(){
+  const key='onb_seen_v1';
+  const onb=document.getElementById('onb');
+  if(!localStorage.getItem(key)){
+    onb.style.display='grid';
+  }
+  document.getElementById('onbLater').onclick=()=>{ onb.style.display='none'; };
+  document.getElementById('onbGo').onclick=()=>{ localStorage.setItem(key,'1'); onb.style.display='none'; showToast('Добро пожаловать!','Начните с калькулятора или откройте Услуги'); };
+})();
+
+// ===== Services flow stepper =====
+(function(){
+  let step = 0;
+  const flow = document.getElementById('flow');
+  const items = flow.querySelectorAll('.badge');
+  function draw(){
+    items.forEach((b,i)=>{
+      b.style.background = i<=step ? 'linear-gradient(135deg, var(--primary), var(--mint))' : 'rgba(255,255,255,.04)';
+      b.style.borderColor = i<=step ? 'transparent' : 'rgba(255,255,255,.14)';
+      b.style.color = i<=step ? '#fff' : '';
+    });
+  }
+  draw();
+  document.getElementById('flowNext').onclick = ()=>{ step = Math.min(items.length-1, step+1); draw(); };
+  document.getElementById('flowReset').onclick = ()=>{ step = 0; draw(); };
+})();
+
+// ===== FAQ copy buttons =====
+document.querySelectorAll('.copy').forEach(b=>b.addEventListener('click', async ()=>{
+  try{ await navigator.clipboard.writeText(b.dataset.text); showToast('Скопировано', 'Текст в буфере обмена'); }catch(e){ showToast('Не удалось скопировать'); }
+}));
+
+// ===== FAQ mini search (client-side demo) =====
+(function(){
+  const base = [
+    {q:'сколько времени займёт', a:'Экспресс‑аудит: 1–2 дня. Подбор режима — 5 минут.'},
+    {q:'маркетплейсы', a:'Да, работаем с Ozon/WB: учитываем комиссии, логистику, возвраты.'},
+    {q:'ндс', a:'Помогаем считать входной/исходящий НДС и эффективную ставку.'},
+    {q:'усн', a:'Подскажем, когда выгоднее 6% vs 15% и как перейти.'},
+  ];
+  const input = document.getElementById('faqSearch');
+  const out = document.getElementById('faqResult');
+  document.getElementById('faqDoSearch').onclick = ()=>{
+    const s = (input.value||'').toLowerCase();
+    if(!s){ out.textContent = 'Введите запрос'; return; }
+    const hit = base.find(i=>s.includes(i.q));
+    out.textContent = hit ? hit.a : 'Ответ не найден. Напишите нам в боте — подскажем.';
+  };
+})();
+
+
+
+// === Invite: ref link + demo leaderboard ===
+(function(){
+  const box = document.getElementById('invite'); if(!box) return;
+  const ref = box.querySelector('#refLink');
+  const leaders = box.querySelector('#leaders');
+  if(ref){
+    const uid = (localStorage.getItem('uid') || (Date.now().toString(36)+Math.random().toString(36).slice(2,8)));
+    localStorage.setItem('uid', uid);
+    const bot = 'pravuchet_bot';
+    ref.value = 'https://t.me/'+bot+'?start=ref_'+uid;
+  }
+  function render(){
+    if(!leaders) return;
+    const me = {name:'Ты', invites: +(localStorage.getItem('ref_count')||0)};
+    const demo = [{name:'@alice',invites:7},{name:'@bob',invites:5},{name:'@mike',invites:3}];
+    const arr = [me, ...demo].sort((a,b)=>b.invites-a.invites);
+    leaders.innerHTML = arr.map((u,i)=>`<div class="lb-row"><span>${i+1}. ${u.name}</span><span class="badge-pill">${u.invites}</span></div>`).join('');
+  }
+  render();
+  const sim = box.querySelector('#simulateRef');
+  if(sim) sim.addEventListener('click', ()=>{ const n=+(localStorage.getItem('ref_count')||0)+1; localStorage.setItem('ref_count', n); render(); });
+  const copy = box.querySelector('#copyRef');
+  if(copy && ref) copy.addEventListener('click', async ()=>{ try{ await navigator.clipboard.writeText(ref.value); showToast('Скопировано','Ссылка в буфере'); }catch(e){} });
+  const share = box.querySelector('#shareRef');
+  if(share && ref) share.addEventListener('click', async ()=>{
+    if(navigator.share){ try{ await navigator.share({title:'Сообщество', text:'Присоединяйся', url:ref.value}); }catch(e){} }
+    else { try{ await navigator.clipboard.writeText(ref.value); showToast('Скопировано','Ссылка в буфере'); }catch(e){} }
+  });
+})();
+
+// ===== Community quiz =====
+(function(){
+  const quiz = document.getElementById('quiz'); if(!quiz) return;
+  let step = 0, score = 0;
+  function next(){
+    document.getElementById('q'+step).style.display='none';
+    step++;
+    if(step<=2){ document.getElementById('q'+step).style.display='block'; }
+    else {
+      const res = document.getElementById('quizResult');
+      const txt = document.getElementById('quizText');
+      let msg = 'Скорее всего выгоднее УСН 6% c контролем расходов.';
+      if(score>=8) msg = 'Рассмотрите ОСНО: входной НДС и вычеты могут дать экономию.';
+      else if(score>=6) msg = 'УСН 15% («доходы-расходы») выглядит перспективно.';
+      else if(score>=4) msg = 'УСН 6% + оптимизация расходов/взносов даст быстрый эффект.';
+      txt.textContent = msg + ' Точный ответ — в калькуляторе.';
+      res.style.display='block';
+    }
+  }
+  quiz.querySelectorAll('.quiz-option').forEach(b=>b.addEventListener('click', ()=>{ score += +b.dataset.score; next(); }));
+  document.getElementById('quizReset').onclick = ()=>{
+    score=0; step=0;
+    ['q0','q1','q2'].forEach((id,i)=>document.getElementById(id).style.display = i? 'none':'block');
+    document.getElementById('quizResult').style.display='none';
+  };
+})();
+
+// ===== Poll (local demo) =====
+(function(){
+  const out = document.getElementById('pollResult'); if(!out) return;
+  const state = {cashflow: 12, tax: 18, ops: 9};
+  document.querySelectorAll('.poll').forEach(b=>b.addEventListener('click', ()=>{
+    state[b.dataset.id]++;
+    const sum = state.cashflow + state.tax + state.ops;
+    const pct = k => Math.round(state[k]*100/sum);
+    out.textContent = `Кассовые разрывы — ${pct('cashflow')}% · Налоги — ${pct('tax')}% · Операционка — ${pct('ops')}%`;
+    showToast('Спасибо!', 'Твой голос учтён');
+  }));
+})();
+
+// ===== Consultation booking =====
+(function(){
+  const types = document.querySelectorAll('.consult-type');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const tzInfo = document.getElementById('tzInfo');
+  const datePick = document.getElementById('datePick');
+  const dateOut = document.getElementById('dateOut');
+  const slots = document.getElementById('slots');
+  const contact = document.getElementById('contact');
+  const confirmBtn = document.getElementById('confirmConsult');
+  const icsBtn = document.getElementById('icsBtn');
+  if(!tzInfo) return;
+
+  tzInfo.textContent = 'Часовой пояс: ' + tz;
+  let SEL = {type:'call', date:null, time:null};
+
+  types.forEach(b=>b.addEventListener('click', ()=>{
+    types.forEach(x=>x.classList.toggle('btn-primary', x===b));
+    types.forEach(x=>x.classList.toggle('btn-ghost', x!==b));
+    SEL.type = b.dataset.type;
+  }));
+
+  // default date = tomorrow
+  const tomorrow = new Date(Date.now()+24*3600*1000);
+  datePick.valueAsDate = tomorrow;
+  dateOut.textContent = tomorrow.toLocaleDateString('ru-RU');
+  renderSlots(tomorrow);
+
+  datePick.addEventListener('change', ()=>{
+    const d = datePick.valueAsDate;
+    dateOut.textContent = d ? d.toLocaleDateString('ru-RU') : '—';
+    renderSlots(d);
+  });
+
+  function renderSlots(d){
+    slots.innerHTML = '';
+    if(!d) return;
+    const start = 10, end = 19; // 10:00-19:00 local
+    for(let h=start; h<=end; h+=1){
+      const t = String(h).padStart(2,'0') + ':00';
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost';
+      btn.textContent = t;
+      btn.onclick = ()=>{
+        slots.querySelectorAll('.btn').forEach(b=>b.classList.remove('btn-primary'));
+        btn.classList.add('btn-primary');
+        SEL.date = new Date(d); SEL.time = t;
+      };
+      slots.appendChild(btn);
+    }
+  }
+
+  function makeICS(dtStart, dtEnd, summary, desc){
+    function pad(n){return String(n).padStart(2,'0');}
+    const y = dtStart.getFullYear(), m = pad(dtStart.getMonth()+1), d=pad(dtStart.getDate());
+    const sh=pad(dtStart.getHours()), sm=pad(dtStart.getMinutes());
+    const y2 = dtEnd.getFullYear(), m2 = pad(dtEnd.getMonth()+1), d2=pad(dtEnd.getDate());
+    const eh=pad(dtEnd.getHours()), em=pad(dtEnd.getMinutes());
+    const ics = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//PravUchet//MiniApp//RU
+BEGIN:VEVENT
+DTSTART:${y}${m}${d}T${sh}${sm}00
+DTEND:${y2}${m2}${d2}T${eh}${em}00
+SUMMARY:${summary}
+DESCRIPTION:${desc}
+END:VEVENT
+END:VCALENDAR`;
+    return new Blob([ics], {type:'text/calendar'});
+  }
+
+  confirmBtn.addEventListener('click', ()=>{
+    if(!SEL.time || !datePick.valueAsDate){ showToast('Заполните данные', 'Выберите дату и время'); return; }
+    if(!contact.value){ showToast('Укажите контакт', 'Телеграм или телефон'); return; }
+    const d = new Date(datePick.value); const [hh,mm]=SEL.time.split(':');
+    d.setHours(+hh, +mm, 0, 0);
+    const de = new Date(d.getTime()+60*60*1000);
+    localStorage.setItem('consult_booking', JSON.stringify({type:SEL.type, at:d.toISOString(), contact:contact.value}));
+    showToast('Заявка отправлена', 'Мы подтвердим время в течение дня.');
+    // build ICS
+    const blob = makeICS(d, de, 'Консультация — Правильный учёт', `Формат: ${SEL.type}; Контакт: ${contact.value}`);
+    const url = URL.createObjectURL(blob);
+    icsBtn.href = url; icsBtn.style.display='inline-flex';
+  });
+})();
+
+// ===== Invite / Leaderboard =====
+(function(){
+  const linkEl = document.getElementById('refLink');
+  const copyBtn = document.getElementById('copyRef');
+  const shareBtn = document.getElementById('shareRef');
+  const simBtn = document.getElementById('simulateRef');
+  const leadersEl = document.getElementById('leaders');
+  const resetBtn = document.getElementById('resetBoard');
+  if(!linkEl) return;
+
+  // Generate / load code
+  let code = localStorage.getItem('ref_code');
+  if(!code){ code = Math.random().toString(36).slice(2,8).toUpperCase(); localStorage.setItem('ref_code', code); }
+  const base = (location.origin || '') + (location.pathname || '');
+  const link = base + '?ref=' + code;
+  linkEl.value = link;
+
+  copyBtn.onclick = async ()=>{
+    try{ await navigator.clipboard.writeText(link); showToast('Скопировано', 'Отправь ссылку друзьям'); }catch(e){ showToast('Не удалось скопировать'); }
+  };
+  shareBtn.onclick = ()=>{
+    if(navigator.share){ navigator.share({title:'Присоединяйся к Правильный учёт', url: link}).catch(()=>{}); }
+    else { navigator.clipboard.writeText(link); showToast('Ссылка скопирована'); }
+  };
+
+  // Leaderboard demo data
+  let board = JSON.parse(localStorage.getItem('ref_board')||'null') || [
+    {name:'@alex', score:5},
+    {name:'@maria', score:3},
+    {name:'@ivan', score:2},
+  ];
+  const meName = '@you';
+  const me = board.find(b=>b.name===meName) || (board.push({name:meName, score:0}), board[board.length-1]);
+
+  function render(){
+    leadersEl.innerHTML = '';
+    const max = Math.max(...board.map(b=>b.score), 1);
+    board.sort((a,b)=>b.score-a.score);
+    board.forEach((b,i)=>{
+      const item = document.createElement('div');
+      item.className = 'list-item';
+      item.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0">
+        <div><strong>${i+1}.</strong> ${b.name}</div>
+        <div>${b.score}</div>
+      </div>
+      <div class="bar"><span style="width:${Math.round(b.score*100/max)}%"></span></div>`;
+      leadersEl.appendChild(item);
+    });
+    localStorage.setItem('ref_board', JSON.stringify(board));
+  }
+  render();
+
+  // simulate +1 (demo)
+  simBtn.onclick = ()=>{ me.score++; render(); showToast('+1 приглашение', 'Зачтено тебе в лидерборд'); };
+
+  resetBtn.onclick = ()=>{ localStorage.removeItem('ref_board'); board = [{name:'@alex',score:5},{name:'@maria',score:3},{name:'@ivan',score:2},{name:meName,score:0}]; render(); };
+})();
+
+
+// ===== Invite: QR + weekly leaderboard =====
+(function(){
+  const linkEl = document.getElementById('refLink');
+  if(!linkEl) return;
+  const url = linkEl.value;
+  // QR via api.qrserver.com (client-side fetch to IMG then draw to canvas)
+  const canvas = document.getElementById('qrCanvas');
+  if (canvas && url){
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = ()=>{
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      // center-fit
+      const size = Math.min(canvas.width, canvas.height)-10;
+      ctx.drawImage(img, (canvas.width-size)/2, (canvas.height-size)/2, size, size);
+    };
+    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(url);
+  }
+  const dl = document.getElementById('dlQR');
+  if(dl && canvas){
+    dl.onclick = ()=>{
+      const a = document.createElement('a');
+      a.download = 'invite_qr.png';
+      a.href = canvas.toDataURL('image/png');
+      a.click();
+    };
+  }
+
+  // Weekly leaderboard
+  const leadersWeek = document.getElementById('leadersWeek');
+  const leadersAll = document.getElementById('leaders');
+  const tabs = document.querySelectorAll('.lb-tab');
+  function weekKey(){
+    const d = new Date(); const onejan = new Date(d.getFullYear(),0,1);
+    const week = Math.ceil((((d - onejan) / 86400000) + onejan.getDay()+1)/7);
+    return 'ref_board_week_' + d.getFullYear() + '_' + week;
+  }
+  function renderList(el, list){
+    el.innerHTML='';
+    const max = Math.max(...list.map(x=>x.score),1);
+    list.sort((a,b)=>b.score-a.score).forEach((b,i)=>{
+      const item = document.createElement('div');
+      item.className='lb-row';
+      item.innerHTML = `<div><strong>${i+1}.</strong> ${b.name}</div><div>${b.score}</div>`;
+      const bar = document.createElement('div'); bar.className='bar';
+      const span = document.createElement('span'); span.style.width = Math.round(b.score*100/max)+'%';
+      bar.appendChild(span);
+      el.appendChild(item); el.appendChild(bar);
+    });
+  }
+  function getBoardAll(){
+    return JSON.parse(localStorage.getItem('ref_board')||'[]');
+  }
+  function getBoardWeek(){
+    return JSON.parse(localStorage.getItem(weekKey())||'[]');
+  }
+  function setBoardWeek(arr){
+    localStorage.setItem(weekKey(), JSON.stringify(arr));
+  }
+  // initial render
+  renderList(leadersAll, getBoardAll());
+  renderList(leadersWeek, getBoardWeek());
+  tabs.forEach(t=>t.addEventListener('click', ()=>{
+    tabs.forEach(x=>x.classList.toggle('btn-primary', x===t));
+    tabs.forEach(x=>x.classList.toggle('btn-ghost', x!==t));
+    if(t.dataset.mode==='week') { renderList(leadersWeek, getBoardWeek()); }
+    else { renderList(leadersAll, getBoardAll()); }
+  }));
+
+  // Hook simulateRef to also update WEEK board
+  const sim = document.getElementById('simulateRef');
+  if(sim){
+    sim.addEventListener('click', ()=>{
+      // all-time already handled in previous logic; duplicate here for week
+      let w = getBoardWeek();
+      const me = '@you';
+      const meItem = w.find(x=>x.name===me) || (w.push({name:me, score:0}), w[w.length-1]);
+      meItem.score++;
+      setBoardWeek(w);
+      renderList(leadersWeek, getBoardWeek());
+    });
+  }
+})();
+
+// ===== Consultation: duration + busy slots + ICS duration =====
+(function(){
+  const durBtns = document.querySelectorAll('.dur');
+  const slotsEl = document.getElementById('slots');
+  const confirmBtn = document.getElementById('confirmConsult');
+  const icsBtn = document.getElementById('icsBtn');
+  if(!slotsEl || !confirmBtn) return;
+  let duration = 30; // minutes
+  let selDateISO = null, selTime = null;
+  durBtns.forEach(b=>b.addEventListener('click', ()=>{
+    durBtns.forEach(x=>x.classList.toggle('btn-primary', x===b));
+    durBtns.forEach(x=>x.classList.toggle('btn-ghost', x!==b));
+    duration = +b.dataset.min;
+    if(selDateISO) renderSlots(new Date(selDateISO)); // refresh for duration
+  }));
+
+  // sample busy intervals (demo): today+2 at 12:00–14:00, every day 13:00 busy
+  function busyFor(date){
+    // returns array of [startHour, endHour) busy
+    return [{s:13, e:14}];
+  }
+
+  function renderSlots(d){
+    slotsEl.innerHTML='';
+    selDateISO = d.toISOString().slice(0,10);
+    const busy = busyFor(d);
+    const start = 10, end = 19;
+    function isBusy(hour){
+      return busy.some(b=>hour>=b.s && hour<b.e);
+    }
+    for(let h=start; h<=end; h++){
+      // if slot would overlap busy considering duration, mark off
+      let blocked = false;
+      for(let t=h; t<h + duration/60; t+=0.5){
+        if(isBusy(Math.floor(t))) { blocked = true; break; }
+      }
+      const label = String(h).padStart(2,'0')+':00';
+      const btn=document.createElement('button');
+      btn.className='btn ' + (blocked? 'btn-ghost' : 'btn-ghost');
+      btn.textContent = label + (blocked? ' ⛔' : '');
+      if(blocked){ btn.disabled = true; btn.style.opacity='.5'; }
+      btn.onclick=()=>{
+        slotsEl.querySelectorAll('.btn').forEach(x=>x.classList.remove('btn-primary'));
+        btn.classList.add('btn-primary'); selTime = label;
+      };
+      slotsEl.appendChild(btn);
+    }
+  }
+  // expose hook from calendar when a date selected
+  const prevSaveSelection = window.saveSelection;
+  window.saveSelection = function(time){
+    // Called by calendar in previous code; we override to support duration
+    selTime = time;
+  };
+
+  // Rebind calendar selection handler to call renderSlots
+  (function patchCalendar(){
+    const cal = document.getElementById('cal');
+    if(!cal) return;
+    const observer = new MutationObserver(()=>{
+      const cells = cal.querySelectorAll('.cal-cell:not(.muted):not(.off)');
+      cells.forEach(c=>{
+        c.addEventListener('click', ()=>{
+          const yearMon = cal.querySelector('.mon').textContent; // not used for ISO; we'll read from class selection
+          const cur = new Date(); // fallback
+          // compute selected date from cells index (simple approach: rely on existing selection in original code)
+          const sel = cal.querySelector('.cal-cell.sel');
+          if(sel){
+            const dnum = +sel.textContent;
+            const title = cal.querySelector('.mon').textContent;
+            const [monName, y] = title.split(' ');
+            const months = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
+            const mi = months.findIndex(m=>title.toLowerCase().includes(m));
+            const date = new Date(+y, mi, dnum);
+            renderSlots(date);
+          }
+        }, {once:true});
+      });
+    });
+    observer.observe(cal, {childList:true, subtree:true});
+  })();
+
+  // Confirm with ICS duration
+  confirmBtn.addEventListener('click', ()=>{
+    if(!selDateISO || !selTime){ showToast('Выберите дату и время'); return; }
+    const [h,m]=selTime.split(':').map(Number);
+    const d = new Date(selDateISO + 'T00:00:00');
+    d.setHours(h,m,0,0);
+    const de = new Date(d.getTime()+duration*60000);
+    const blob = new Blob([`BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART:${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}00
+DTEND:${de.getFullYear()}${String(de.getMonth()+1).padStart(2,'0')}${String(de.getDate()).padStart(2,'0')}T${String(de.getHours()).padStart(2,'0')}${String(de.getMinutes()).padStart(2,'0')}00
+SUMMARY:Консультация — Правильный учёт
+END:VEVENT
+END:VCALENDAR`], {type:'text/calendar'});
+    const url = URL.createObjectURL(blob);
+    const a = document.getElementById('icsBtn');
+    a.href = url; a.style.display='inline-flex';
+    showToast('Бронь создана', `Продолжительность ${duration} мин`);
+  });
+})();
+
+// ===== Community quests & mini-chat typing =====
+(function(){
+  // Quests
+  const quests = document.querySelectorAll('.quest');
+  const qBanner = document.getElementById('questState');
+  let state = JSON.parse(localStorage.getItem('quests_state')||'{}');
+  function redraw(){
+    const done = Object.keys(state).filter(k=>state[k]).length;
+    qBanner.textContent = `Прогресс: ${done}/3`;
+    quests.forEach(q=>{
+      q.classList.toggle('btn-primary', !!state[q.dataset.id]);
+      q.classList.toggle('btn-ghost', !state[q.dataset.id]);
+    });
+  }
+  quests.forEach(q=>q.addEventListener('click', ()=>{
+    state[q.dataset.id] = !state[q.dataset.id];
+    localStorage.setItem('quests_state', JSON.stringify(state));
+    redraw();
+    if(state[q.dataset.id]) showToast('Зачтено', 'Шаг выполнен');
+  }));
+  redraw();
+
+  // Mini chat (demo)
+  const box = document.getElementById('chatBox');
+  const input = document.getElementById('chatInput');
+  const send = document.getElementById('chatSend');
+  const typing = document.getElementById('typing');
+  const me = '@you';
+  function addMsg(user, msg){
+    const line = document.createElement('div');
+    line.innerHTML = `<strong>${user}</strong>: ${msg}`;
+    box.appendChild(line); box.scrollTop = box.scrollHeight;
+  }
+  send.addEventListener('click', ()=>{
+    const t = input.value.trim(); if(!t) return;
+    addMsg(me, t); input.value='';
+    // fake "typing..." and reply
+    typing.textContent = '@admin печатает…';
+    setTimeout(()=>{ addMsg('@admin', 'Спасибо! Принято 👍'); typing.textContent=''; }, 1000 + Math.random()*1000);
+  });
+})();
+
+
+// ===== Community stats: animated counters + ring =====
+(function(){
+  const counters = document.querySelectorAll('#community [data-count]');
+  const ring = document.getElementById('ring');
+  const ringText = document.getElementById('ringText');
+  if(!counters.length || !ring) return;
+  const length = 2*Math.PI*52; // stroke length used in SVG
+  ring.style.strokeDasharray = String(length);
+  ring.style.strokeDashoffset = String(length);
+  const obs = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if(!e.isIntersecting) return;
+      const el = e.target;
+      const target = +el.dataset.count;
+      const suffix = el.dataset.suffix || '';
+      const t0 = performance.now(), dur = 900;
+      function tick(t){
+        const k = Math.min(1,(t-t0)/dur);
+        const val = Math.round(target*k);
+        el.textContent = val + suffix;
+        if(k<1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+      obs.unobserve(el);
+    });
+  }, {threshold:.3});
+  counters.forEach(el=>obs.observe(el));
+  // Animate ring to a weekly progress (demo: 72% or from quests)
+  let progress = 72;
+  try {
+    const qs = JSON.parse(localStorage.getItem('quests_state')||'{}');
+    const done = Object.values(qs).filter(Boolean).length;
+    progress = Math.round((done/3)*100) || progress;
+  } catch(e){}
+  const offset = length*(1 - progress/100);
+  let cur = length;
+  function ringTick(){
+    cur -= (cur - offset) * 0.1;
+    if (Math.abs(cur - offset) < 0.5) cur = offset;
+    ring.style.strokeDashoffset = String(cur);
+    ringText.textContent = Math.round((1 - cur/length)*100) + '%';
+    if (cur !== offset) requestAnimationFrame(ringTick);
+  }
+  requestAnimationFrame(ringTick);
+})();
+
+</script>
+<script>
+// ===== NAV (desktop-safe): single source of truth =====
+(function(){
+  const nav   = document.getElementById('spa-nav');
+  const track = nav.querySelector('.track');
+  const links = [...track.querySelectorAll('[data-page]')];
+  const bubble = track.querySelector('.bubble');
+  
+  const ALLOW_DRAG = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+const pages = document.querySelectorAll('section.page');
+
+  function show(id){
+    pages.forEach(p=>p.classList.toggle('active', p.id===id));
+    links.forEach(a=>a.classList.toggle('active', a.dataset.page===id));
+    centerActive();
+    moveBubble();
+    console.log('page_view', {page:id});
+  }
+  window.show = show;
+
+  let dragging = false;
+  track.addEventListener('click', (e)=>{
+    if (dragging) { dragging = false; return; }
+    const a = e.target.closest('[data-page]');
+    if(!a) return;
+    e.preventDefault();
+    show(a.dataset.page);
+    __updateURL(a.dataset.page);
+  });
+
+  let isDown=false, sx=0, sl=0;
+  track.addEventListener('pointerdown', (e)=>{ if (!ALLOW_DRAG) return;
+    isDown = true; dragging = false; sx = e.clientX; sl = track.scrollLeft; track.setPointerCapture(e.pointerId);
+  });
+  track.addEventListener('pointermove', (e)=>{ if (!ALLOW_DRAG) return;
+    if(!isDown) return;
+    const dx = e.clientX - sx;
+    if(Math.abs(dx) > 6) dragging = true;
+    track.scrollLeft = sl - dx;
+    moveBubble();
+  });
+  track.addEventListener('pointerup', ()=>{ isDown=false; });
+
+  links.forEach(a=>{
+    a.setAttribute('tabindex','0');
+    a.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); show(a.dataset.page); __updateURL(a.dataset.page); }
+    });
+  });
+
+  function moveBubble(){
+    const a = track.querySelector('.btn.active') || links[0];
+    if(!a) return;
+    bubble.style.left  = (a.offsetLeft - track.scrollLeft + 6) + 'px';
+    bubble.style.width = a.getBoundingClientRect().width + 'px';
+  }
+
+  function centerActive(){
+    const a = track.querySelector('.btn.active');
+    if(!a) return;
+    a.scrollIntoView({behavior:'smooth', inline:'center', block:'nearest'});
+  }
+
+  function scaleItems(){
+    const rect = track.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    links.forEach(a=>{
+      const r = a.getBoundingClientRect();
+      const ax = r.left + r.width/2;
+      const d = Math.abs(ax - cx);
+      const k = Math.max(0.9, 1.0 - d / (rect.width*0.9));
+      a.style.transform = `scale(${k.toFixed(3)})`;
+      a.style.opacity = String(0.65 + (k-0.9)*2.4);
+    });
+  }
+
+  track.addEventListener('scroll', ()=>{ requestAnimationFrame(()=>{ scaleItems(); moveBubble(); }); }, {passive:true});
+  window.addEventListener('resize', ()=>{ scaleItems(); moveBubble(); });
+
+  const initial = (location.hash||'#home').slice(1);
+  show(initial || 'home');
+  setTimeout(()=>{ scaleItems(); moveBubble(); }, 60);
+})();
+</script>
+
+<script>
+// ==== v16-safe config (only placeholders; nothing breaks if empty) ====
+window.APP_CONFIG = {
+  TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbzieQs5aBbptrJ5TlCcGTPHPHEQgvftRUm6c9UPZ9QbpF-_IsqXRhqC7JTzAJt9nwNL/exec',                        // вставишь URL Apps Script
+  API_KEY: '',                            // опционально
+  USE_TG_SIGNATURE: true
+};
 
 // helpers
 function __uid(){
@@ -1250,7 +3478,7 @@ try{ window.showToast && showToast('Отправлено', 'Мы получил�
 /* Config guard */
 window.APP_CONFIG = Object.assign({
   TG_BOT_USERNAME: 'serge_kamensky_bot',
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbzieQs5aBbptrJ5TlCcGTPHPHEQgvftRUm6c9UPZ9QbpF-_IsqXRhqC7JTzAJt9nwNL/exec',
+  GAS_WEBHOOK: '',
   API_KEY: '',
   USE_TG_SIGNATURE: true
 }, window.APP_CONFIG||{});
@@ -3767,60 +5995,238 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 </script>
-
-<script>
-// --- Unified apiEvent: attach tg_init or fallback API key for Desktop/browser ---
-(function(){
-  const cfg = window.APP_CONFIG || (window.APP_CONFIG = {});
-  const GAS = cfg.GAS_WEBHOOK;
-  if (!window.apiEvent) window.apiEvent = async function(type, data){ data = data || {}; return { ok:false, error:'no_backend' }; };
-
-  const prev = window.apiEvent;
-  window.apiEvent = async function(type, data){
-    data = data || {};
-    try{
-      if (!data.tg_init && window.Telegram && Telegram.WebApp) {
-        data.tg_init = Telegram.WebApp.initData || '';
-      }
-      if ((!data.tg_init || data.tg_init.length === 0) && cfg.API_KEY) {
-        data.key = cfg.API_KEY; // Desktop/browser fallback
-      }
-    }catch(_){}
-    if (typeof prev === 'function') return prev(type, data);
-    try {
-      const r = await fetch(GAS, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type, ...data }) });
-      return await r.json();
-    } catch(e){
-      return { ok:false, error: String(e) };
-    }
-  };
-})();
-</script>
-
-
-<script>
-// === Unified apiEvent (Desktop fallback): attach tg_init or API key ===
-(function(){
-  const cfg = window.APP_CONFIG || (window.APP_CONFIG = {});
-  const GAS = cfg.GAS_WEBHOOK;
-  const prev = typeof window.apiEvent === 'function' ? window.apiEvent : null;
-  window.apiEvent = async function(type, data){
-    data = data || {};
-    try{
-      if (!data.tg_init && window.Telegram && Telegram.WebApp){
-        data.tg_init = Telegram.WebApp.initData || '';
-      }
-      if ((!data.tg_init || data.tg_init.length === 0) && cfg.API_KEY){
-        data.key = cfg.API_KEY; // Desktop/browser fallback
-      }
-    }catch(_){}
-    if (prev) return prev(type, data);
-    // Fallback transport if no previous transport
-    const res = await fetch(GAS, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type, ...data }) });
-    return res.json();
-  };
-})();
-</script>
-
 </body>
 </html>
+
+<!-- === HOTFIX V7.2 — Calendar × GAS (robust YM parsing, optimistic remove, debounce book) === -->
+<script>
+(function(){
+  if (window.__CAL_GAS_HOTFIX_V72__) return; window.__CAL_GAS_HOTFIX_V72__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = (n)=>String(n).padStart(2,'0');
+  const RU2MM = {
+    'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06',
+    'июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12'
+  };
+
+  function nowTzISO(tz){
+    try{ return new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10); }
+    catch(_){ return new Date().toISOString().slice(0,10); }
+  }
+  const USER_TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+  const todayISO = nowTzISO(USER_TZ);
+
+  // --- YM parser: tolerates commas, quotes, two-digit years, extra spaces ---
+  function parseYM(){
+    const el = qs('#cal .cal-head .mon') || qs('#cal .mon') || qs('.cal-month') || qs('[data-cal-month]');
+    if (!el) return null;
+    const raw = (el.textContent||'').toLowerCase().replace(/[,'`´’ʻ‘]/g,' ').replace(/\s+/g,' ').trim();
+    // Examples accepted: "октябрь 2025", "октябрь 25", "октябрь, 2025", "октябрь ’25"
+    const m = raw.match(/([а-яёa-z]+)\s+(\d{2,4})/i);
+    if (!m) return null;
+    const monthStem = m[1].slice(0,4).replace('ё','е');
+    const mm = RU2MM[monthStem.slice(0,3)] || RU2MM[monthStem.slice(0,4)];
+    let y = m[2];
+    if (y.length === 2){
+      const yy = parseInt(y,10);
+      y = String(yy < 80 ? 2000+yy : 1900+yy);
+    }
+    return mm ? { y, m: mm } : null;
+  }
+
+  function fallbackYM(){
+    // 1) from any day cell with dataset.iso
+    const d = qs('#cal .cal-cell[data-iso]');
+    if (d && d.dataset.iso){
+      const [y,m] = d.dataset.iso.split('-');
+      return { y, m };
+    }
+    // 2) from today
+    const dt = new Date(); return { y: String(dt.getUTCFullYear()), m: dd2(dt.getUTCMonth()+1) };
+  }
+
+  async function fetchFreeSlotsMonth(y, m){
+    const base = (window.APP_CONFIG && (APP_CONFIG.GAS_WEBHOOK || APP_CONFIG.API_URL)) || '';
+    if (!base) return null;
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('tz', USER_TZ);
+    try{
+      const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tg) u.searchParams.set('tg_init', tg);
+      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+      if (window.APP_CONFIG && APP_CONFIG.DEV_ID) u.searchParams.set('dev_id', APP_CONFIG.DEV_ID);
+    }catch(_){}
+    const r = await fetch(u.toString()).catch(()=>null);
+    const j = r && await r.json().catch(()=>null);
+    return (j && j.ok) ? j : null;
+  }
+
+  function applyDaysFromMap(ym, freeMap){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+
+      const isPast = (iso < todayISO);
+      const hasSlots = freeMap && Array.isArray(freeMap[iso]) && freeMap[iso].length>0;
+      cell.classList.toggle('off', isPast || !hasSlots);
+      cell.classList.toggle('muted', isPast || !hasSlots);
+      if (isPast || !hasSlots) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+    });
+  }
+
+  function addMinHHMM(s, dm){
+    const [h,m] = s.split(':').map(Number); const tot = h*60 + m + dm;
+    const nh = String(Math.floor(tot/60)).padStart(2,'0'); const nm = String(tot%60).padStart(2,'0');
+    return nh+':'+nm;
+  }
+
+  function contiguousOK(arr, start, step, need){
+    for (let i=0;i<need;i++){ if (!arr.includes(addMinHHMM(start, i*step))) return false; }
+    return true;
+  }
+
+  function renderSlotsForDate(iso, keepTime, autoPickIfMissing){
+    const container = qs('#slots,#slotsTime'); if (!container) return;
+    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
+    container.innerHTML = ''; container.classList.add('show');
+    if (!arr.length){ container.innerHTML = '<div class=\"muted\">Нет свободных слотов</div>'; return; }
+
+    const step = (window.__GRAN__ || 30);
+    const dur  = (window.scope && (scope._durMin||30)) || 30;
+    const need = Math.ceil(dur/step);
+
+    arr.forEach(t=>{
+      const ok = contiguousOK(arr, t, step, need);
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost btn-slot' + (ok?'':' disabled');
+      b.textContent = t; b.dataset.time = t;
+      if (ok){
+        b.addEventListener('click', ()=>{
+          qsa('button', container).forEach(x=>x.classList.remove('btn-primary','active'));
+          b.classList.add('btn-primary','active');
+          window.scope = window.scope || {}; scope._selTime = t;
+          window.SEL = window.SEL || {}; SEL.time = t;
+        });
+      }
+      container.appendChild(b);
+    });
+
+    // keep selected time if still valid
+    let picked = false;
+    if (keepTime && arr.includes(keepTime) && contiguousOK(arr, keepTime, step, need)){
+      const btn = Array.from(container.querySelectorAll('button')).find(x => (x.textContent||'').trim() === keepTime);
+      if (btn){ btn.click(); picked = true; }
+    }
+    // else auto-pick first contiguous
+    if (!picked && autoPickIfMissing){
+      const firstOk = Array.from(container.querySelectorAll('button')).find(b => !b.classList.contains('disabled'));
+      if (firstOk) firstOk.click();
+    }
+  }
+
+  async function syncMonth(){
+    let ym = parseYM() || fallbackYM();
+    const j = await fetchFreeSlotsMonth(ym.y, ym.m);
+    if (j){
+      window.__FREE__ = j.days || {}; window.__GRAN__ = j.gran || 30;
+      applyDaysFromMap(ym, window.__FREE__);
+    }
+  }
+
+  // optimistic remove + debounce book
+  let bookingBusy = false;
+  async function bookHandlerWrapper(prevApiEvent, type, data){
+    const res = await (prevApiEvent ? prevApiEvent(type, data) : undefined);
+    try{
+      if ((type==='consult_booking' || (data && data.type==='consult_booking'))){
+        if (res && res.ok){
+          // resync + keep day
+          const keep = (window.scope && scope._selDate) || '';
+          await syncMonth();
+          if (keep) renderSlotsForDate(keep, (window.scope && scope._selTime) || '', false);
+        }else{
+          // failed → rollback optimistic change if мы её ранее сделали
+          if (window.__lastOptimistic){
+            const { date, time, dur } = window.__lastOptimistic;
+            const step = (window.__GRAN__ || 30);
+            const need = Math.ceil((dur||30)/step);
+            const arr = window.__FREE__[date] || [];
+            const toAdd = Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step));
+            window.__FREE__[date] = Array.from(new Set(arr.concat(toAdd))).sort();
+            renderSlotsForDate(date, time, true);
+            window.__lastOptimistic = null;
+          }
+        }
+      }
+    }catch(_){}
+    bookingBusy = false;
+    const btn = qs('#book,#doBook,#makeBooking'); if (btn){ btn.disabled = false; }
+    return res;
+  }
+
+  // monkeypatch apiEvent to add optimistic remove & debounce
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      if (type==='consult_booking' || (data && data.type==='consult_booking')){
+        if (bookingBusy) return { ok:false, error:'busy' };
+        bookingBusy = true;
+        const btn = qs('#book,#doBook,#makeBooking'); if (btn){ btn.disabled = true; }
+        // optimistic remove from client cache
+        const date = (data && data.date) || (window.scope && scope._selDate);
+        const time = (data && data.time) || (window.scope && scope._selTime);
+        const dur  = (data && (data.duration_min||data.duration)) || (window.scope && (scope._durMin||30)) || 30;
+        if (date && time && window.__FREE__){
+          const step = (window.__GRAN__ || 30);
+          const need = Math.ceil(dur/step);
+          const arr  = window.__FREE__[date] || [];
+          const toRemove = new Set(Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step)));
+          window.__FREE__[date] = arr.filter(t => !toRemove.has(t));
+          window.__lastOptimistic = { date, time, dur };
+          // repaint quickly
+          renderSlotsForDate(date, time, false);
+        }
+      }
+      return bookHandlerWrapper(prev, type, data);
+    };
+  })();
+
+  // wire up clicks
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
+      setTimeout(syncMonth, 60);
+    }
+  });
+  document.addEventListener('click', (e)=>{
+    const cell = e.target.closest && e.target.closest('#cal .cal-cell'); if (!cell) return;
+    if (cell.classList.contains('off')) return;
+    const iso = cell.dataset.iso || cell.dataset.date; if (!iso) return;
+    window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
+    renderSlotsForDate(iso, (window.scope && scope._selTime) || '', true);
+  });
+  document.addEventListener('click', (e)=>{
+    const btn = e.target.closest && e.target.closest('.dur,[data-min]'); if (!btn) return;
+    const m = +btn.getAttribute('data-min') || parseInt(btn.textContent, 10) || 30;
+    window.scope = window.scope || {}; scope._durMin = m;
+    window.SEL   = window.SEL   || {}; SEL.duration_min = m;
+    const hidden = document.getElementById('consultDuration'); if (hidden) hidden.value = m;
+    const iso = (window.scope && scope._selDate) || '';
+    const keep = (window.scope && scope._selTime) || '';
+    if (iso) setTimeout(()=> renderSlotsForDate(iso, keep, true), 10);
+  }, {capture:true});
+
+  // init
+  setTimeout(syncMonth, 80);
+})();
+</script>
