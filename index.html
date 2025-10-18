@@ -441,7 +441,7 @@ html,body{-webkit-text-size-adjust:100%}
     const r = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ type, tg_init: tgInit, .......extra })
+      body: JSON.stringify({ type, tg_init: tgInit, .....extra })
     });
     return r.json();
   }
@@ -3905,7 +3905,7 @@ window.__domLog = function(){};
     const tg = (window.Telegram && Telegram.WebApp) || null;
     const tgInit = tg ? (tg.initData || '') : '';
     const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
-    const data = JSON.stringify({ .......extra });
+    const data = JSON.stringify({ .....extra });
     return _jsonp(url, { mode: 'event', type, tg_init: tgInit, data });
   }
   window.apiEvent = apiEvent;
@@ -5582,7 +5582,9 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 
 <!-- ==== HOTFIX V9: tails hidden + monthly cache (no jitter) ==== -->
 <style>
+  /* Хвосты предыдущего/следующего месяцев — полностью убрать и запретить клики */
   #cal .cal-cell.tail{ visibility: hidden; pointer-events: none; }
+  /* На всякий случай */
   #cal .cal-cell.off{ pointer-events: none; }
 </style>
 <script>
@@ -5595,8 +5597,9 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
   const TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
 
-  const TTL_MS = 5 * 60 * 1000;
-  const RAM = new Map();
+  // ---- КЭШ НА МЕСЯЦ ----
+  const TTL_MS = 5 * 60 * 1000; // 5 минут
+  const RAM = new Map();        // in-memory
   function keyYM(y,m){ return `${y}-${m}`; }
   function getCache(y,m){
     const k = keyYM(y,m);
@@ -5621,13 +5624,15 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     try{ sessionStorage.removeItem('free:'+k); }catch(_){}
   }
 
+  // ---- FETCH С УЧЁТОМ КЭША + RACE-SAFE ----
   let __REQ_ID__ = 0;
   async function fetchFreeSlotsMonth(y, m, opt){
     opt = opt || {};
     if (!opt.force){
       const cached = getCache(y,m);
-      if (cached) return cached;
+      if (cached) return cached; // мгновенно из кэша — без «скачков»
     }
+
     const base = (window.APP_CONFIG && (APP_CONFIG.GAS_WEBHOOK || APP_CONFIG.API_URL)) || '';
     if (!base) return null;
     const first = `${y}-${m}-01`;
@@ -5643,17 +5648,22 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
       else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
       if (window.APP_CONFIG && APP_CONFIG.DEV_ID) u.searchParams.set('dev_id', APP_CONFIG.DEV_ID);
     }catch(_){}
+
     const my = ++__REQ_ID__;
     let j = null;
     try{
       const r = await fetch(u.toString());
       j = r && await r.json().catch(()=>null);
     }catch(_){ j = null; }
-    if (my !== __REQ_ID__) return null;
-    if (j && j.ok){ return setCache(y, m, j.days, j.gran, j.tz); }
+    if (my !== __REQ_ID__) return null; // устаревший ответ, игнорим
+
+    if (j && j.ok){
+      return setCache(y, m, j.days, j.gran, j.tz);
+    }
     return null;
   }
 
+  // ---- MARK TAILS: убрать хвосты соседних месяцев (оставляя сетку ровной) ----
   function daysInMonth(y,m){ return new Date(y, m, 0).getDate(); }
   function parseYM(){
     const el = qs('#cal [data-year][data-month]');
@@ -5684,7 +5694,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
         const iso = `${ym.y}-${ym.m}-${dd2(dayNum)}`;
         cell.dataset.iso = iso;
         cell.classList.remove('tail');
-        cell.style.visibility = '';
+        cell.style.visibility = ''; // на случай предыдущих применений
       } else {
         cell.classList.add('tail','off');
         cell.setAttribute('aria-disabled','true');
@@ -5693,15 +5703,16 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     });
   }
 
+  // ---- APPLY DAYS from cached/free data ----
   function todayISO(){
     try{ return new Date().toLocaleString('sv-SE', { timeZone: TZ }).slice(0,10); }
     catch(_){ return new Date().toISOString().slice(0,10); }
   }
-  function applyDays(ym, data){
-    const grid = qs('#cal .cal-grid'); if (!grid || !data) return;
+  function applyDays(ym, free){
+    const grid = qs('#cal .cal-grid'); if (!grid || !free) return;
     markTailsAndAttachISO(ym);
-    const days = data.days || {};
     const today = todayISO();
+    const days = free.days || {};
     qsa('#cal .cal-cell').forEach(cell=>{
       if (cell.classList.contains('cal-dow') || cell.classList.contains('tail')) return;
       const iso = cell.dataset.iso;
@@ -5712,6 +5723,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     });
   }
 
+  // ---- SLOTS RENDER (с учётом кэша) ----
   function renderSlotsForDate(iso){
     const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
     const ym = parseYM(); if (!ym) return;
@@ -5733,6 +5745,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     });
   }
 
+  // ---- SYNC MONTH (использует КЭШ; force=false по умолчанию) ----
   async function syncMonth(force){
     const ym = parseYM(); if (!ym) return;
     const data = await fetchFreeSlotsMonth(ym.y, ym.m, { force: !!force });
@@ -5740,9 +5753,10 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     applyDays(ym, data);
   }
 
+  // ---- КЛИКИ ----
   document.addEventListener('click', (e)=>{
     if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
-      setTimeout(()=> syncMonth(false), 60);
+      setTimeout(()=> syncMonth(false), 60); // берём из кэша / догружаем при необходимости
     }
   });
   document.addEventListener('click', (e)=>{
@@ -5753,8 +5767,10 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     renderSlotsForDate(iso);
   });
 
+  // ---- ИНИТ ----
   setTimeout(()=> syncMonth(false), 80);
 
+  // ---- ИНВАЛИДАЦИЯ КЭША ПОСЛЕ БРОНИ ----
   (function(){
     const prev = window.apiEvent;
     window.apiEvent = async function(type, data){
@@ -5765,7 +5781,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
           if (res && res.ok && date){
             const ym = { y: date.slice(0,4), m: date.slice(5,7) };
             invalidateMonth(ym.y, ym.m);
-            setTimeout(()=> syncMonth(true), 50);
+            setTimeout(()=> syncMonth(true), 50); // форсим новую загрузку для свежести
           }
         }
       }catch(_){}
