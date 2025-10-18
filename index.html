@@ -5876,6 +5876,96 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 
+
+<!-- ==== STEP4 SINGLE-SOURCE: route all calendar logic through V5 to avoid double renders ==== -->
+<script>
+(function(){
+  if (window.__CAL_STEP4_SINGLE__) return; window.__CAL_STEP4_SINGLE__ = true;
+
+  // Идея: не удаляем старые блоки, а мягко перенаправляем их в V5-реализацию,
+  // чтобы не было двух источников истины (ранний блок + V5).
+  // Это убирает дублированные перерисовки и «скачки».
+
+  const preferV5 = true;
+
+  // 1) Если вызывают ранний syncMonthAndDays — перезапускаем V5 syncMonth
+  if (preferV5 && typeof window.syncMonthAndDays === 'function'){
+    const _noop = async function(){
+      if (typeof window.syncMonth === 'function') { try { return await window.syncMonth(); } catch(_){} }
+      return undefined;
+    };
+    window.syncMonthAndDays = _noop;
+  }
+
+  // 2) Если вызывают ранний loadFreeSlotsForMonth — прокидываем в V5 loadFreeSlots
+  if (preferV5 && typeof window.loadFreeSlotsForMonth === 'function'){
+    window.loadFreeSlotsForMonth = async function(y, m, opt){
+      if (typeof window.loadFreeSlots === 'function'){
+        const res = await window.loadFreeSlots(y, m, opt);
+        if (res && res.days){
+          window.__FREE__ = res.days;
+          if (res.gran) window.__GRAN__ = res.gran;
+        }
+      }
+    };
+  }
+
+  // 3) Если вызывают ранний applyDaysState — используем V5 applyDays
+  if (preferV5 && typeof window.applyDaysState === 'function'){
+    window.applyDaysState = function(y, m){
+      let ym = (typeof y === 'object' && y && y.y && y.m) ? y : { y, m };
+      if (typeof window.applyDays === 'function' && window.__FREE__){
+        try { return window.applyDays(ym, window.__FREE__); } catch(_){}
+      }
+    };
+  }
+
+  // 4) Приведём начальный запуск к одному месту: если оба блока пытаются делать init — оставим V5-пайплайн
+  // Для надёжности запустим V5 sync с небольшим отложением (если уже был — просто обновит)
+  setTimeout(function(){
+    if (typeof window.syncMonth === 'function'){
+      try { window.syncMonth(); } catch(_) {}
+    }
+  }, 100);
+
+  // 5) Убедимся, что обработчики навигации по месяцам не множатся:
+  // Введём флаг и сами подпишемся один раз; оставшиеся слушатели пусть отработают, но V5 всё равно перерисует последним.
+  if (!window.__CAL_NAV_BOUND__){
+    window.__CAL_NAV_BOUND__ = true;
+    document.addEventListener('click', function(e){
+      if (e.target.closest && (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
+        setTimeout(function(){
+          if (typeof window.syncMonth === 'function'){
+            try { window.syncMonth(); } catch(_){}
+          }
+        }, 50);
+      }
+    });
+  }
+
+  // 6) На случай, если другие блоки дергают рендер слотов напрямую — V5 остаётся источником правды (он последним перерисует слоты по выбранному дню)
+  // Дополнительно, если слоты дорисовались, применим фильтр длительности (из STEP3) и авто-подбор (из STEP3)
+  function applyPostSlotAdjust(){
+    try{
+      if (typeof window.refilterSlots === 'function') window.refilterSlots();
+      // Автовыбор уже добавлен в STEP3 (autoPickFirstAllowed), просто дернем вручную если есть
+      if (window.__CAL_STEP3_STABLE__){
+        const wrap = document.querySelector('#slots,#slotsTime');
+        if (wrap && !wrap.querySelector('button.btn-primary,button.active')){
+          const first = wrap.querySelector('button:not(.off):not([disabled])');
+          if (first) first.click();
+        }
+      }
+    }catch(_){}
+  }
+  const slotsWrap = document.querySelector('#slots,#slotsTime');
+  if (slotsWrap){
+    new MutationObserver(function(){ setTimeout(applyPostSlotAdjust, 10); })
+      .observe(slotsWrap, { childList:true, subtree:true });
+  }
+})();
+</script>
+
 </body>
 </html>
 
