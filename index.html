@@ -441,7 +441,7 @@ html,body{-webkit-text-size-adjust:100%}
     const r = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ type, tg_init: tgInit, .....extra })
+      body: JSON.stringify({ type, tg_init: tgInit, .......extra })
     });
     return r.json();
   }
@@ -2974,7 +2974,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbz6gI7ZtQZa2HOQMDRBi5Zx6a-0eMiViIkM-pmBq9mEk7BwlRdIMSLyNTiDGmrkkO4m/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -3905,7 +3905,7 @@ window.__domLog = function(){};
     const tg = (window.Telegram && Telegram.WebApp) || null;
     const tgInit = tg ? (tg.initData || '') : '';
     const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
-    const data = JSON.stringify({ .....extra });
+    const data = JSON.stringify({ .......extra });
     return _jsonp(url, { mode: 'event', type, tg_init: tgInit, data });
   }
   window.apiEvent = apiEvent;
@@ -5579,6 +5579,202 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
+
+<!-- ==== HOTFIX V9: tails hidden + monthly cache (no jitter) ==== -->
+<style>
+  #cal .cal-cell.tail{ visibility: hidden; pointer-events: none; }
+  #cal .cal-cell.off{ pointer-events: none; }
+</style>
+<script>
+(function(){
+  if (window.__CAL_GAS_V9_CACHE__) return; window.__CAL_GAS_V9_CACHE__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = (n)=>String(n).padStart(2,'0');
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+  const TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+  const TTL_MS = 5 * 60 * 1000;
+  const RAM = new Map();
+  function keyYM(y,m){ return `${y}-${m}`; }
+  function getCache(y,m){
+    const k = keyYM(y,m);
+    let e = RAM.get(k);
+    if (!e){
+      try{ e = JSON.parse(sessionStorage.getItem('free:'+k) || 'null'); }catch(_){ e = null; }
+      if (e) RAM.set(k, e);
+    }
+    if (e && (Date.now() - (e.ts||0)) < TTL_MS) return e;
+    return null;
+  }
+  function setCache(y,m,days,gran,tz){
+    const k = keyYM(y,m);
+    const e = { ts: Date.now(), days: days||{}, gran: gran||30, tz: tz||TZ };
+    RAM.set(k, e);
+    try{ sessionStorage.setItem('free:'+k, JSON.stringify(e)); }catch(_){}
+    return e;
+  }
+  function invalidateMonth(y,m){
+    const k = keyYM(y,m);
+    RAM.delete(k);
+    try{ sessionStorage.removeItem('free:'+k); }catch(_){}
+  }
+
+  let __REQ_ID__ = 0;
+  async function fetchFreeSlotsMonth(y, m, opt){
+    opt = opt || {};
+    if (!opt.force){
+      const cached = getCache(y,m);
+      if (cached) return cached;
+    }
+    const base = (window.APP_CONFIG && (APP_CONFIG.GAS_WEBHOOK || APP_CONFIG.API_URL)) || '';
+    if (!base) return null;
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('tz', TZ);
+    try{
+      const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tg) u.searchParams.set('tg_init', tg);
+      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+      if (window.APP_CONFIG && APP_CONFIG.DEV_ID) u.searchParams.set('dev_id', APP_CONFIG.DEV_ID);
+    }catch(_){}
+    const my = ++__REQ_ID__;
+    let j = null;
+    try{
+      const r = await fetch(u.toString());
+      j = r && await r.json().catch(()=>null);
+    }catch(_){ j = null; }
+    if (my !== __REQ_ID__) return null;
+    if (j && j.ok){ return setCache(y, m, j.days, j.gran, j.tz); }
+    return null;
+  }
+
+  function daysInMonth(y,m){ return new Date(y, m, 0).getDate(); }
+  function parseYM(){
+    const el = qs('#cal [data-year][data-month]');
+    if (el) return { y: el.getAttribute('data-year'), m: el.getAttribute('data-month') };
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon') || qs('.cal-month') || qs('[data-cal-month]');
+    if (!h) return null;
+    const t = (h.textContent||'').toLowerCase().replace(/[,'`´’ʻ‘]/g,' ').replace(/\s+/g,' ').trim();
+    const m = t.match(/([а-яёa-z]+)\s+(\d{2,4})/i);
+    if (!m) return null;
+    const stem = m[1].slice(0,4).replace('ё','е');
+    const mm = RU2MM[stem.slice(0,3)] || RU2MM[stem.slice(0,4)];
+    let y = m[2];
+    if (y.length===2){ const yy = parseInt(y,10); y = String(yy<80?2000+yy:1900+yy); }
+    return mm ? { y, m:mm } : null;
+  }
+  function markTailsAndAttachISO(ym){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    const cells = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
+    let startIdx = cells.findIndex(c => /^\\s*1\\s*$/.test((c.dataset.day || c.textContent || '').trim()));
+    if (startIdx < 0) startIdx = 0;
+    const total = daysInMonth(+ym.y, +ym.m);
+    const endIdx = startIdx + total - 1;
+    cells.forEach((cell, idx)=>{
+      const dayTxt = (cell.dataset.day || cell.textContent || '').trim();
+      const dayNum = /^\\d+$/.test(dayTxt) ? parseInt(dayTxt,10) : NaN;
+      const inMonth = (idx >= startIdx && idx <= endIdx && !isNaN(dayNum) && dayNum>=1 && dayNum<=total);
+      if (inMonth){
+        const iso = `${ym.y}-${ym.m}-${dd2(dayNum)}`;
+        cell.dataset.iso = iso;
+        cell.classList.remove('tail');
+        cell.style.visibility = '';
+      } else {
+        cell.classList.add('tail','off');
+        cell.setAttribute('aria-disabled','true');
+        if (cell.dataset.iso) delete cell.dataset.iso;
+      }
+    });
+  }
+
+  function todayISO(){
+    try{ return new Date().toLocaleString('sv-SE', { timeZone: TZ }).slice(0,10); }
+    catch(_){ return new Date().toISOString().slice(0,10); }
+  }
+  function applyDays(ym, data){
+    const grid = qs('#cal .cal-grid'); if (!grid || !data) return;
+    markTailsAndAttachISO(ym);
+    const days = data.days || {};
+    const today = todayISO();
+    qsa('#cal .cal-cell').forEach(cell=>{
+      if (cell.classList.contains('cal-dow') || cell.classList.contains('tail')) return;
+      const iso = cell.dataset.iso;
+      const has = iso && Array.isArray(days[iso]) && days[iso].length>0;
+      const ok  = has && iso >= today;
+      cell.classList.toggle('off', !ok);
+      if (!ok) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+    });
+  }
+
+  function renderSlotsForDate(iso){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    const ym = parseYM(); if (!ym) return;
+    const cached = getCache(ym.y, ym.m); if (!cached) return;
+    const arr = (cached.days && cached.days[iso]) || [];
+    wrap.innerHTML = ''; wrap.classList.add('show');
+    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+    arr.forEach(t=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost';
+      b.textContent = t; b.dataset.time = t;
+      b.addEventListener('click', ()=>{
+        qsa('button', wrap).forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        window.scope = window.scope || {}; scope._selTime = t;
+        window.SEL = window.SEL || {}; SEL.time = t;
+      });
+      wrap.appendChild(b);
+    });
+  }
+
+  async function syncMonth(force){
+    const ym = parseYM(); if (!ym) return;
+    const data = await fetchFreeSlotsMonth(ym.y, ym.m, { force: !!force });
+    if (!data) return;
+    applyDays(ym, data);
+  }
+
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
+      setTimeout(()=> syncMonth(false), 60);
+    }
+  });
+  document.addEventListener('click', (e)=>{
+    const cell = e.target.closest && e.target.closest('#cal .cal-cell'); if (!cell) return;
+    if (cell.classList.contains('off') || cell.classList.contains('tail')) return;
+    const iso = cell.dataset.iso || cell.dataset.date; if (!iso) return;
+    window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
+    renderSlotsForDate(iso);
+  });
+
+  setTimeout(()=> syncMonth(false), 80);
+
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if (type==='consult_booking' || (data && data.type==='consult_booking')){
+          const date = (data && data.date) || (window.scope && scope._selDate) || '';
+          if (res && res.ok && date){
+            const ym = { y: date.slice(0,4), m: date.slice(5,7) };
+            invalidateMonth(ym.y, ym.m);
+            setTimeout(()=> syncMonth(true), 50);
+          }
+        }
+      }catch(_){}
+      return res;
+    };
+  })();
+})();
+</script>
+
 </body>
 </html>
 
