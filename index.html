@@ -1445,6 +1445,218 @@ html,body{-webkit-text-size-adjust:100%}
 })();
 </script>
 
+<!-- === STEP7: HARD NO-TAILS + PAST CLAMP (non-destructive) === -->
+<style>
+  /* визуально и логически вырубаем хвосты */
+  #cal .cal-grid .cal-cell[data-tail]{opacity:.28; pointer-events:none; filter:saturate(.6)}
+</style>
+<script>
+(function(){
+  if (window.__STEP7_NO_TAILS__) return; window.__STEP7_NO_TAILS__ = true;
+
+  const dd2 = n => String(n).padStart(2,'0');
+
+  function monOffset(y,m){
+    const d = new Date(`${y}-${m}-01T00:00:00`);
+    const wd = d.getDay();          // 0..6 (вс..сб)
+    return (wd + 6) % 7;            // 0..6 (пн..вс)
+  }
+  function daysInMonth(y,m){ return new Date(+y, +m, 0).getDate(); }
+
+  function parseYM_any(){
+    try{ if (typeof parseYM==='function'){ const r=parseYM(); if(r&&r.y&&r.m) return r; } }catch(_){}
+    const h = document.querySelector('#cal .cal-head .mon')||document.querySelector('#cal .mon');
+    if (h){
+      const t=(h.textContent||'').trim().toLowerCase();
+      const map={'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12'};
+      const y=(t.match(/(\d{4})/)||[])[1]; const stem=(t.match(/^[^\d\s]+/)||[''])[0].slice(0,3).replace('ё','е');
+      if (y && map[stem]) return { y, m: map[stem] };
+    }
+    const now=new Date(); return { y:String(now.getFullYear()), m:dd2(now.getMonth()+1) };
+  }
+
+  function hardClampMonth(y,m, freeMap){
+    const grid = document.querySelector('#cal .cal-grid'); if(!grid) return;
+    const cells = Array.from(grid.querySelectorAll('.cal-cell:not(.cal-dow)'));
+    if (!cells.length) return;
+
+    const offIdx = monOffset(y,m);
+    const max    = daysInMonth(y,m);
+    const today = new Date(); const todayFloor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+    cells.forEach((cell, idx)=>{
+      cell.removeAttribute('data-tail'); cell.removeAttribute('aria-disabled');
+      cell.classList.remove('off','muted');
+
+      const label = (cell.dataset.day || cell.textContent || '').trim();
+      const n = parseInt(label,10);
+      if (!n || isNaN(n)) {
+        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); delete cell.dataset.iso; return;
+      }
+
+      // 1) ХВОСТЫ — по позиции в сетке
+      if (idx < offIdx || idx >= offIdx + max){
+        cell.dataset.tail = (idx<offIdx) ? 'prev' : 'next';
+        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); delete cell.dataset.iso; return;
+      }
+
+      // 2) Нормальная дата текущего месяца
+      const iso = `${y}-${m}-${dd2(n)}`;
+      cell.dataset.iso = iso;
+
+      // 3) ПРОШЕДШИЕ — отключаем
+      const [Y,M,D] = iso.split('-').map(Number);
+      const dt = new Date(Y, M-1, D);
+      if (dt < todayFloor){ cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); return; }
+
+      // 4) Если есть карта свобод — применим доступность
+      if (freeMap){
+        const arr = freeMap[iso];
+        const has = Array.isArray(arr) && arr.length>0;
+        if (!has){ cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); }
+      }
+    });
+  }
+
+  // Подмешиваемся к твоим функциям, чтобы кламп срабатывал всегда
+  const prevApplyDays   = window.applyDays;
+  const prevSyncA       = window.syncMonthAndDays;
+  const prevSyncB       = window.syncMonth;
+
+  window.applyDays = function(ym, freeMap){
+    hardClampMonth(ym.y, ym.m, freeMap || window.__FREE__ || {});
+    if (typeof prevApplyDays === 'function') return prevApplyDays.apply(this, arguments);
+  };
+
+  function wrapSync(fn){
+    return async function(){
+      const r = await fn.apply(this, arguments);
+      const ym = parseYM_any(); if (ym) hardClampMonth(ym.y, ym.m, window.__FREE__||{});
+      return r;
+    };
+  }
+  if (typeof prevSyncA === 'function') window.syncMonthAndDays = wrapSync(prevSyncA);
+  else if (typeof prevSyncB === 'function') window.syncMonth = wrapSync(prevSyncB);
+
+  // Первый прогон + реакция на любые мутации грида
+  setTimeout(()=>{ const ym = parseYM_any(); if (ym) hardClampMonth(ym.y, ym.m, window.__FREE__||{}); }, 120);
+  const grid = document.querySelector('#cal .cal-grid');
+  if (grid){
+    const mo = new MutationObserver(()=>{ const ym = parseYM_any(); if (ym) hardClampMonth(ym.y, ym.m, window.__FREE__||{}); });
+    mo.observe(grid, { childList:true, subtree:true });
+  }
+})();
+</script>
+
+
+<!-- === HOLD→BOOK flow with graceful fallback === -->
+<script>
+(function(){
+  if (window.__HOLD_FLOW_V1__) return; window.__HOLD_FLOW_V1__ = true;
+
+  const dd2 = n=>String(n).padStart(2,'0');
+  const TZ  = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+
+  // читаем выбранное: дата/время/длительность/формат (под разные разметки)
+  function pickSelection(){
+    const sel = {};
+    sel.date = (window.scope && (scope._selDate||scope.selDate)) || window.__selDate || '';
+    // время берём из активной кнопки или из scope
+    const btn = document.querySelector('#slots .btn-primary, #slots .active');
+    sel.time = (window.scope && (scope._selTime||scope.selTime)) || (btn && (btn.dataset.time||btn.textContent||'').trim()) || '';
+    // длительность — как в твоём бридже
+    let dur = 30;
+    const cand =
+      document.querySelector('[data-dur].active,[data-duration].active,.dur.btn-primary,.dur.active') ||
+      document.querySelector('input[name="duration"]:checked') ||
+      document.querySelector('#duration,select[name="duration"]');
+    if (cand){
+      if (cand.dataset?.min) dur = parseInt(cand.dataset.min,10)||dur;
+      else if (cand.dataset?.dur) dur = parseInt(cand.dataset.dur,10)||dur;
+      else if (cand.value) dur = parseInt(cand.value,10)||dur;
+      else { const txt=(cand.textContent||'').replace(/\D+/g,''); if (txt) dur = parseInt(txt,10)||dur; }
+    }
+    if (window.scope && +scope._durMin) dur = +scope._durMin;
+    sel.duration_min = Math.min(Math.max(dur, 15), 240);
+    // формат (если есть)
+    const fmtEl = document.querySelector('.consult-type.btn-primary, .consult-type.active');
+    sel.format = (fmtEl && fmtEl.dataset && fmtEl.dataset.type) || (window.SEL&&SEL.type) || (window.scope&&scope._format) || '';
+    return sel;
+  }
+
+  // безопасный вызов apiEvent (учтём, что он уже переопределён ранее)
+  async function callEvent(type, payload){
+    const fn = window.apiEvent || window.__postGAS && (t=>window.__postGAS({type:t, ...payload}));
+    if (!fn) throw new Error('apiEvent not found');
+    return await window.apiEvent(type, payload);
+  }
+
+  // мягкая пересинхронизация месяца после коллизий/успеха
+  async function softResync(){
+    try{
+      if (typeof window.syncMonthAndDays === 'function') await window.syncMonthAndDays();
+      else if (typeof window.syncMonth === 'function') await window.syncMonth();
+    }catch(_){}
+  }
+
+  // перехватываем consult_booking
+  const prev = window.apiEvent;
+  window.apiEvent = async function(type, data){
+    // не наша операция — передаём как есть
+    if (!(type==='consult_booking' || (data && data.type==='consult_booking'))){
+      return prev ? prev(type, data) : undefined;
+    }
+
+    // соберём выбор и аккуратно дольём в payload
+    data = data || {};
+    const sel = pickSelection();
+    data.date = data.date || sel.date;
+    data.time = data.time || sel.time;
+    data.duration_min = data.duration_min || sel.duration_min;
+    data.format = data.format || sel.format;
+    data.tz = data.tz || TZ;
+
+    // если чего-то нет — дёрнем исходный обработчик (пусть сам ругается)
+    if (!data.date || !data.time){
+      return prev ? prev(type, data) : undefined;
+    }
+
+    // 1) пробуем HOLD
+    let holdOk = false, holdRes = null;
+    try{
+      holdRes = await callEvent('hold_slot', { date:data.date, time:data.time, duration_min:data.duration_min, tz:data.tz });
+      holdOk  = !!(holdRes && holdRes.ok);
+    }catch(_){ /* сеть и т.п. — просто пойдём без hold */ }
+
+    // если бэк не умеет hold_slot (unknown_type) или вернул ошибку — продолжаем старым путём
+    // но если «слот уже недоступен/на холде» — сразу пересинхроним и дадим ошибку наружу
+    if (!holdOk){
+      if (holdRes && (holdRes.error==='slot_unavailable' || holdRes.error==='slot_on_hold')){
+        await softResync();
+        return holdRes;
+      }
+      // fallback: просто бронируем как раньше
+      const res = prev ? await prev(type, data) : undefined;
+      if (res && res.ok===false && /slot_unavailable/.test(res.error||'')) await softResync();
+      if (res && res.ok) await softResync(); // чтобы слот исчез у всех
+      return res;
+    }
+
+    // 2) HOLD прошёл — теперь BOOK
+    const res = prev ? await prev(type, data) : undefined;
+
+    // 3) Реакция на результат
+    if (res && res.ok) {
+      // успех — обновим месяц, чтобы слот исчез
+      await softResync();
+      return res;
+    }
+    // неудача (коллизия) — пересинхроним и вернём что есть
+    await softResync();
+    return res;
+  };
+})();
+</script>
   
     
 </head>
