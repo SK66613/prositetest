@@ -1445,218 +1445,6 @@ html,body{-webkit-text-size-adjust:100%}
 })();
 </script>
 
-<!-- === STEP7: HARD NO-TAILS + PAST CLAMP (non-destructive) === -->
-<style>
-  /* визуально и логически вырубаем хвосты */
-  #cal .cal-grid .cal-cell[data-tail]{opacity:.28; pointer-events:none; filter:saturate(.6)}
-</style>
-<script>
-(function(){
-  if (window.__STEP7_NO_TAILS__) return; window.__STEP7_NO_TAILS__ = true;
-
-  const dd2 = n => String(n).padStart(2,'0');
-
-  function monOffset(y,m){
-    const d = new Date(`${y}-${m}-01T00:00:00`);
-    const wd = d.getDay();          // 0..6 (вс..сб)
-    return (wd + 6) % 7;            // 0..6 (пн..вс)
-  }
-  function daysInMonth(y,m){ return new Date(+y, +m, 0).getDate(); }
-
-  function parseYM_any(){
-    try{ if (typeof parseYM==='function'){ const r=parseYM(); if(r&&r.y&&r.m) return r; } }catch(_){}
-    const h = document.querySelector('#cal .cal-head .mon')||document.querySelector('#cal .mon');
-    if (h){
-      const t=(h.textContent||'').trim().toLowerCase();
-      const map={'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12'};
-      const y=(t.match(/(\d{4})/)||[])[1]; const stem=(t.match(/^[^\d\s]+/)||[''])[0].slice(0,3).replace('ё','е');
-      if (y && map[stem]) return { y, m: map[stem] };
-    }
-    const now=new Date(); return { y:String(now.getFullYear()), m:dd2(now.getMonth()+1) };
-  }
-
-  function hardClampMonth(y,m, freeMap){
-    const grid = document.querySelector('#cal .cal-grid'); if(!grid) return;
-    const cells = Array.from(grid.querySelectorAll('.cal-cell:not(.cal-dow)'));
-    if (!cells.length) return;
-
-    const offIdx = monOffset(y,m);
-    const max    = daysInMonth(y,m);
-    const today = new Date(); const todayFloor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-
-    cells.forEach((cell, idx)=>{
-      cell.removeAttribute('data-tail'); cell.removeAttribute('aria-disabled');
-      cell.classList.remove('off','muted');
-
-      const label = (cell.dataset.day || cell.textContent || '').trim();
-      const n = parseInt(label,10);
-      if (!n || isNaN(n)) {
-        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); delete cell.dataset.iso; return;
-      }
-
-      // 1) ХВОСТЫ — по позиции в сетке
-      if (idx < offIdx || idx >= offIdx + max){
-        cell.dataset.tail = (idx<offIdx) ? 'prev' : 'next';
-        cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); delete cell.dataset.iso; return;
-      }
-
-      // 2) Нормальная дата текущего месяца
-      const iso = `${y}-${m}-${dd2(n)}`;
-      cell.dataset.iso = iso;
-
-      // 3) ПРОШЕДШИЕ — отключаем
-      const [Y,M,D] = iso.split('-').map(Number);
-      const dt = new Date(Y, M-1, D);
-      if (dt < todayFloor){ cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); return; }
-
-      // 4) Если есть карта свобод — применим доступность
-      if (freeMap){
-        const arr = freeMap[iso];
-        const has = Array.isArray(arr) && arr.length>0;
-        if (!has){ cell.classList.add('off','muted'); cell.setAttribute('aria-disabled','true'); }
-      }
-    });
-  }
-
-  // Подмешиваемся к твоим функциям, чтобы кламп срабатывал всегда
-  const prevApplyDays   = window.applyDays;
-  const prevSyncA       = window.syncMonthAndDays;
-  const prevSyncB       = window.syncMonth;
-
-  window.applyDays = function(ym, freeMap){
-    hardClampMonth(ym.y, ym.m, freeMap || window.__FREE__ || {});
-    if (typeof prevApplyDays === 'function') return prevApplyDays.apply(this, arguments);
-  };
-
-  function wrapSync(fn){
-    return async function(){
-      const r = await fn.apply(this, arguments);
-      const ym = parseYM_any(); if (ym) hardClampMonth(ym.y, ym.m, window.__FREE__||{});
-      return r;
-    };
-  }
-  if (typeof prevSyncA === 'function') window.syncMonthAndDays = wrapSync(prevSyncA);
-  else if (typeof prevSyncB === 'function') window.syncMonth = wrapSync(prevSyncB);
-
-  // Первый прогон + реакция на любые мутации грида
-  setTimeout(()=>{ const ym = parseYM_any(); if (ym) hardClampMonth(ym.y, ym.m, window.__FREE__||{}); }, 120);
-  const grid = document.querySelector('#cal .cal-grid');
-  if (grid){
-    const mo = new MutationObserver(()=>{ const ym = parseYM_any(); if (ym) hardClampMonth(ym.y, ym.m, window.__FREE__||{}); });
-    mo.observe(grid, { childList:true, subtree:true });
-  }
-})();
-</script>
-
-
-<!-- === HOLD→BOOK flow with graceful fallback === -->
-<script>
-(function(){
-  if (window.__HOLD_FLOW_V1__) return; window.__HOLD_FLOW_V1__ = true;
-
-  const dd2 = n=>String(n).padStart(2,'0');
-  const TZ  = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
-
-  // читаем выбранное: дата/время/длительность/формат (под разные разметки)
-  function pickSelection(){
-    const sel = {};
-    sel.date = (window.scope && (scope._selDate||scope.selDate)) || window.__selDate || '';
-    // время берём из активной кнопки или из scope
-    const btn = document.querySelector('#slots .btn-primary, #slots .active');
-    sel.time = (window.scope && (scope._selTime||scope.selTime)) || (btn && (btn.dataset.time||btn.textContent||'').trim()) || '';
-    // длительность — как в твоём бридже
-    let dur = 30;
-    const cand =
-      document.querySelector('[data-dur].active,[data-duration].active,.dur.btn-primary,.dur.active') ||
-      document.querySelector('input[name="duration"]:checked') ||
-      document.querySelector('#duration,select[name="duration"]');
-    if (cand){
-      if (cand.dataset?.min) dur = parseInt(cand.dataset.min,10)||dur;
-      else if (cand.dataset?.dur) dur = parseInt(cand.dataset.dur,10)||dur;
-      else if (cand.value) dur = parseInt(cand.value,10)||dur;
-      else { const txt=(cand.textContent||'').replace(/\D+/g,''); if (txt) dur = parseInt(txt,10)||dur; }
-    }
-    if (window.scope && +scope._durMin) dur = +scope._durMin;
-    sel.duration_min = Math.min(Math.max(dur, 15), 240);
-    // формат (если есть)
-    const fmtEl = document.querySelector('.consult-type.btn-primary, .consult-type.active');
-    sel.format = (fmtEl && fmtEl.dataset && fmtEl.dataset.type) || (window.SEL&&SEL.type) || (window.scope&&scope._format) || '';
-    return sel;
-  }
-
-  // безопасный вызов apiEvent (учтём, что он уже переопределён ранее)
-  async function callEvent(type, payload){
-    const fn = window.apiEvent || window.__postGAS && (t=>window.__postGAS({type:t, ...payload}));
-    if (!fn) throw new Error('apiEvent not found');
-    return await window.apiEvent(type, payload);
-  }
-
-  // мягкая пересинхронизация месяца после коллизий/успеха
-  async function softResync(){
-    try{
-      if (typeof window.syncMonthAndDays === 'function') await window.syncMonthAndDays();
-      else if (typeof window.syncMonth === 'function') await window.syncMonth();
-    }catch(_){}
-  }
-
-  // перехватываем consult_booking
-  const prev = window.apiEvent;
-  window.apiEvent = async function(type, data){
-    // не наша операция — передаём как есть
-    if (!(type==='consult_booking' || (data && data.type==='consult_booking'))){
-      return prev ? prev(type, data) : undefined;
-    }
-
-    // соберём выбор и аккуратно дольём в payload
-    data = data || {};
-    const sel = pickSelection();
-    data.date = data.date || sel.date;
-    data.time = data.time || sel.time;
-    data.duration_min = data.duration_min || sel.duration_min;
-    data.format = data.format || sel.format;
-    data.tz = data.tz || TZ;
-
-    // если чего-то нет — дёрнем исходный обработчик (пусть сам ругается)
-    if (!data.date || !data.time){
-      return prev ? prev(type, data) : undefined;
-    }
-
-    // 1) пробуем HOLD
-    let holdOk = false, holdRes = null;
-    try{
-      holdRes = await callEvent('hold_slot', { date:data.date, time:data.time, duration_min:data.duration_min, tz:data.tz });
-      holdOk  = !!(holdRes && holdRes.ok);
-    }catch(_){ /* сеть и т.п. — просто пойдём без hold */ }
-
-    // если бэк не умеет hold_slot (unknown_type) или вернул ошибку — продолжаем старым путём
-    // но если «слот уже недоступен/на холде» — сразу пересинхроним и дадим ошибку наружу
-    if (!holdOk){
-      if (holdRes && (holdRes.error==='slot_unavailable' || holdRes.error==='slot_on_hold')){
-        await softResync();
-        return holdRes;
-      }
-      // fallback: просто бронируем как раньше
-      const res = prev ? await prev(type, data) : undefined;
-      if (res && res.ok===false && /slot_unavailable/.test(res.error||'')) await softResync();
-      if (res && res.ok) await softResync(); // чтобы слот исчез у всех
-      return res;
-    }
-
-    // 2) HOLD прошёл — теперь BOOK
-    const res = prev ? await prev(type, data) : undefined;
-
-    // 3) Реакция на результат
-    if (res && res.ok) {
-      // успех — обновим месяц, чтобы слот исчез
-      await softResync();
-      return res;
-    }
-    // неудача (коллизия) — пересинхроним и вернём что есть
-    await softResync();
-    return res;
-  };
-})();
-</script>
   
     
 </head>
@@ -6508,6 +6296,221 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   }
 </style>
 
+
+<!-- === CF WORKER INTEGRATION + CALENDAR HARDEN (final) === -->
+<script>
+(function(){
+  window.APP_CONFIG = window.APP_CONFIG || {};
+  if (!APP_CONFIG.GAS_WEBHOOK) APP_CONFIG.GAS_WEBHOOK = "https://tg-calendar.cyberian13.workers.dev/";
+  if (!APP_CONFIG.API_KEY)     APP_CONFIG.API_KEY     = "dev-123";
+
+  const TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Moscow");
+  const dd2 = n => String(n).padStart(2,'0');
+  function nowISO(){ const d=new Date(); return d.toISOString().slice(0,10); }
+
+  function cfURL(mode, params){
+    const base = APP_CONFIG.GAS_WEBHOOK;
+    const u = new URL(base);
+    u.searchParams.set('mode', mode);
+    for (const [k,v] of Object.entries(params||{})){ if (v!=null) u.searchParams.set(k,String(v)); }
+    try{
+      const tgi = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tgi) u.searchParams.set('tg_init', tgi);
+      else if (APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
+    }catch(_){}
+    return u.toString();
+  }
+  async function cfGET(mode, params){
+    const r = await fetch(cfURL(mode, params), { credentials:'omit' });
+    return r.json();
+  }
+
+  const TTL_MS = 60 * 1000;
+  const RAM = new Map();
+  function cacheKey(y,m){ return `free:${y}-${m}`; }
+  function readSS(k){ try{return JSON.parse(sessionStorage.getItem(k)||'null')}catch(_){return null} }
+  function writeSS(k,obj){ try{sessionStorage.setItem(k, JSON.stringify(obj))}catch(_){} }
+
+  async function loadMonthFree(y,m){
+    const key = cacheKey(y,m);
+    let entry = RAM.get(key) || readSS(key);
+    const fresh = entry && (Date.now() - (entry.ts||0) < TTL_MS);
+    if (fresh){
+      window.__GRAN__ = entry.gran || 30;
+      window.__FREE__ = entry.days || {};
+      hardenCalendar(y,m);
+      setTimeout(async ()=>{
+        const net = await fetchMonthFree(y,m);
+        if (net && net.ok){
+          RAM.set(key, { ts:Date.now(), gran:net.gran, days:net.days });
+          writeSS(key, { ts:Date.now(), gran:net.gran, days:net.days });
+          const ym = parseYM_any(); if (ym && ym.y==y && ym.m==m){
+            window.__GRAN__ = net.gran || 30;
+            window.__FREE__ = net.days || {};
+            hardenCalendar(y,m);
+          }
+        }
+      }, 0);
+      return entry;
+    }else{
+      const net = await fetchMonthFree(y,m);
+      if (net && net.ok){
+        RAM.set(key, { ts:Date.now(), gran:net.gran, days:net.days });
+        writeSS(key, { ts:Date.now(), gran:net.gran, days:net.days });
+        window.__GRAN__ = net.gran || 30;
+        window.__FREE__ = net.days || {};
+        hardenCalendar(y,m);
+      }
+      return net;
+    }
+  }
+  async function fetchMonthFree(y,m){
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
+    return await cfGET('free_slots', { from:first, to:last, gran:30, lead_min:120, tz:TZ });
+  }
+
+  function parseYM_any(){
+    const map={я:'01'}; // fallback
+    const mru = {янв:'01',фев:'02',мар:'03',апр:'04',мая:'05',май:'05',июн:'06',июл:'07',авг:'08',сен:'09',сент:'09',окт:'10',ноя:'11',дек:'12'};
+    const men = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const h = document.querySelector('#cal .cal-head .mon') || document.querySelector('#cal .mon');
+    if(!h) return null;
+    const t=(h.textContent||'').trim().toLowerCase().replace('ё','е');
+    const mm = (mru[t.slice(0,3)] || men[t.slice(0,3)]);
+    const y=t.match(/(20\d{2})/);
+    if(mm && y) return { y:y[1], m:mm };
+    return null;
+  }
+
+  function hardenCalendar(y,m){
+    const ym = { y, m };
+    const grid = document.querySelector('#cal .cal-grid'); if(!grid) return;
+    const today = nowISO();
+    grid.querySelectorAll('.cal-cell').forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+      const arr = (window.__FREE__ && window.__FREE__[iso]) || null;
+      const shouldOff = !arr || !(Array.isArray(arr) && arr.length>0);
+      const past = iso < today;
+      const off = shouldOff || past;
+      cell.classList.toggle('off', off);
+      cell.classList.toggle('muted', off);
+      if (off) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+    });
+  }
+
+  async function syncMonthCF(){
+    const ym = parseYM_any(); if(!ym) return;
+    await loadMonthFree(ym.y, ym.m);
+  }
+  setTimeout(syncMonthCF, 60);
+  document.addEventListener('click', (ev)=>{
+    if (ev.target.closest('#cal #prevM') || ev.target.closest('#cal #nextM')){
+      setTimeout(syncMonthCF, 30);
+    }
+  });
+
+  function rerenderSlotsForSelectedDate(){
+    const wrap = document.querySelector('#slots,#slotsTime'); if(!wrap) return;
+    const iso = window.__selDate;
+    if(!iso) return;
+    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
+    wrap.innerHTML = '';
+    if(!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+    arr.forEach(t=>{
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost';
+      b.textContent = t; b.dataset.time = t;
+      b.onclick = ()=>{
+        wrap.querySelectorAll('button').forEach(x=>x.classList.remove('btn-primary','active'));
+        b.classList.add('btn-primary','active');
+        window.scope = window.scope || {}; scope._selTime = t;
+        window.SEL   = window.SEL   || {}; SEL.time = t;
+      };
+      wrap.appendChild(b);
+    });
+  }
+
+  window.apiBootstrap = async function(){ return await cfGET('ping', {}); };
+
+  function readDuration(){
+    const el = document.querySelector('[data-dur].active,[data-duration].active,.dur.btn-primary,.dur.active,input[name="duration"]:checked,#duration,select[name="duration"]');
+    let v = 30;
+    if (el){
+      if (el.dataset && el.dataset.min) v = parseInt(el.dataset.min,10)||v;
+      else if (el.dataset && el.dataset.dur) v = parseInt(el.dataset.dur,10)||v;
+      else if (el.value) v = parseInt(el.value,10)||v;
+      else {
+        const txt = (el.textContent||'').replace(/\D+/g,'');
+        if (txt) v = parseInt(txt,10)||v;
+      }
+    }
+    try{ if(window.scope && +scope._durMin) v = +scope._durMin; }catch(_){}
+    return Math.min(Math.max(v,15),240);
+  }
+
+  const prevApiEvent = window.apiEvent;
+  window.apiEvent = async function(type, data){
+    data = data || {};
+    if (typeof prevApiEvent === 'function' && !data.__skipPrev){
+      try{ await prevApiEvent(type, Object.assign({}, data, { __skipPrev:true })); }catch(_){}
+    }
+
+    if (type === 'consult_booking' || (data && data.type === 'consult_booking')){
+      if (!data.date){
+        const el = document.querySelector('#cal .cal-cell.sel,[data-date].sel');
+        if (el) data.date = el.dataset.iso || el.dataset.date || '';
+        if (!data.date && window.scope) data.date = scope._selDate || scope.selDate || '';
+      }
+      if (!data.time){
+        const b = document.querySelector('#slots .btn-primary,#slots .active,#slotsTime .btn-primary,#slotsTime .active');
+        if (b) data.time = (b.dataset.time || b.textContent || '').trim();
+        if (!data.time && window.scope) data.time = scope._selTime || scope.selTime || '';
+      }
+      if (!data.duration_min) data.duration_min = readDuration();
+
+      try{
+        await cfGET('event', {
+          type: 'hold_slot',
+          date: data.date, time: data.time,
+          duration_min: data.duration_min, tz: TZ
+        });
+      }catch(_){}
+
+      const res = await cfGET('event', Object.assign({ type }, data));
+      if (res && res.ok){
+        if (window.__FREE__ && data.date && data.time){
+          const arr = window.__FREE__[data.date] || [];
+          const idx = arr.indexOf(data.time);
+          if (idx >= 0){ arr.splice(idx,1); }
+          window.__selDate = data.date;
+          rerenderSlotsForSelectedDate();
+          if (arr.length === 0){
+            const ym = parseYM_any(); if(ym) hardenCalendar(ym.y, ym.m);
+          }
+        }
+      }
+      return res;
+    }else{
+      return await cfGET('event', Object.assign({ type }, data));
+    }
+  };
+
+  document.addEventListener('click', (ev)=>{
+    const cell = ev.target.closest && ev.target.closest('#cal .cal-cell');
+    if (!cell || cell.classList.contains('off')) return;
+    const iso = cell.dataset.iso || cell.dataset.date;
+    if (!iso) return;
+    window.__selDate = iso;
+    rerenderSlotsForSelectedDate();
+  });
+})();
+</script>
+<!-- === /CF patch === -->
 </body>
 </html>
 
