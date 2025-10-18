@@ -6414,13 +6414,30 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     }
   });
 
-  function rerenderSlotsForSelectedDate(){
-    const wrap = document.querySelector('#slots,#slotsTime'); if(!wrap) return;
-    const iso = window.__selDate;
-    if(!iso) return;
-    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
-    wrap.innerHTML = '';
-    if(!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+  
+function rerenderSlotsForSelectedDate(){
+  const wrap = document.querySelector('#slots,#slotsTime'); if(!wrap) return;
+  const iso = window.__selDate;
+  const chosen = window.__selTime || (window.SEL && (SEL.time || SEL._time));
+  const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
+  wrap.innerHTML = '';
+  if(!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+  arr.forEach(t=>{
+    const b = document.createElement('button');
+    b.className = 'btn btn-ghost';
+    b.textContent = t; b.dataset.time = t;
+    if (chosen && chosen===t) { b.classList.add('btn-primary','active'); } // только подсветка, без клика
+    b.addEventListener('click', ()=>{
+      wrap.querySelectorAll('button').forEach(x=>x.classList.remove('btn-primary','active'));
+      b.classList.add('btn-primary','active');
+      window.__selTime = t;
+      window.SEL = window.SEL || {}; SEL.time = t;
+      window.scope = window.scope || {}; scope._selTime = t;
+    }, { passive: true });
+    wrap.appendChild(b);
+  });
+}
+
     arr.forEach(t=>{
       const b = document.createElement('button');
       b.className = 'btn btn-ghost';
@@ -6511,6 +6528,25 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 <!-- === /CF patch === -->
+
+<script>
+// Guard against programmatic haptics (prevents vibro on auto state changes)
+(function(){
+  try{
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.HapticFeedback){
+      const H = Telegram.WebApp.HapticFeedback;
+      let userTap = false;
+      window.addEventListener('pointerdown', ()=>{ userTap = true; setTimeout(()=>userTap=false,400); }, true);
+      ['impactOccurred','notificationOccurred','selectionChanged'].forEach(fn=>{
+        if (typeof H[fn] === 'function'){
+          const orig = H[fn].bind(H);
+          H[fn] = (...args)=>{ if (userTap) { try{ return orig(...args); }catch(_){ } } };
+        }
+      });
+    }
+  }catch(_){}
+})();
+</script>
 </body>
 </html>
 
