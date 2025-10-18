@@ -441,7 +441,7 @@ html,body{-webkit-text-size-adjust:100%}
     const r = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ type, tg_init: tgInit, .....extra })
+      body: JSON.stringify({ type, tg_init: tgInit, ...extra })
     });
     return r.json();
   }
@@ -695,6 +695,8 @@ html,body{-webkit-text-size-adjust:100%}
       if(!day || /\D/.test(day)) return;
       const iso = `${y}-${m}-${dd2(day)}`;
       cell.dataset.iso = iso;
+      const hasKey = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
+      if (!hasKey) return;
       if(!isDayFree(iso)){
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
@@ -732,8 +734,11 @@ html,body{-webkit-text-size-adjust:100%}
   }
 
   async function syncMonthAndDays(){
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
     const ym = parseHeadYM(); if(!ym) return;
+    const __my = ++window.__CAL_REQ_ID__;
     await loadFreeSlotsForMonth(ym.y, ym.m);
+    if (__my !== window.__CAL_REQ_ID__) return; // stale
     applyDaysState(ym.y, ym.m);
   }
 
@@ -2974,7 +2979,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbz6gI7ZtQZa2HOQMDRBi5Zx6a-0eMiViIkM-pmBq9mEk7BwlRdIMSLyNTiDGmrkkO4m/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -3905,7 +3910,7 @@ window.__domLog = function(){};
     const tg = (window.Telegram && Telegram.WebApp) || null;
     const tgInit = tg ? (tg.initData || '') : '';
     const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
-    const data = JSON.stringify({ .....extra });
+    const data = JSON.stringify({ ...extra });
     return _jsonp(url, { mode: 'event', type, tg_init: tgInit, data });
   }
   window.apiEvent = apiEvent;
