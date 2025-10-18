@@ -378,6 +378,13 @@ html,body{-webkit-text-size-adjust:100%}
   #cal[data-busy="1"] .cal-cell{ transition:none !important; }
 }
 
+
+/* === Slots & duration UX polish === */
+#slots .btn, #slotsTime .btn { transition: background-color .18s ease, color .18s ease, transform .12s ease; }
+#slots .btn.btn-primary, #slotsTime .btn.btn-primary { transform: translateY(-1px); }
+.cta .dur { transition: background-color .18s ease, color .18s ease; }
+.cta .dur.btn-primary { box-shadow: 0 10px 22px rgba(91,140,255,.35); }
+
 </style>
 
 <!-- ==== DEV TEST (встраивается на home, видно только с ?debug=1) ==== -->
@@ -2272,7 +2279,7 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
     durs.forEach(b=> b.addEventListener('click', ()=>{ showSlots(); renderSlots(); }));
   }
 
-  function renderSlots(){
+  function renderSlots_DEPRECATED(){
     if(!slotsEl) return;
     slotsEl.innerHTML = '';
     const start = 10, end = 18;
@@ -2338,7 +2345,7 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
     calEl.querySelector('#nextM').onclick = ()=> buildCalendar(monthOffset+1);
   }
 
-  function renderSlots(){
+  function renderSlots_DEPRECATED(){
     slotsEl.innerHTML='';
     if(!selDate) return;
     const start=10, end=19; // 10-19
@@ -5605,8 +5612,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 <style>
   /* Хвосты соседних месяцев — полностью скрываем и запрещаем клики */
   #cal .cal-cell.tail{ visibility:hidden; pointer-events:none; }
-</style>
-<script>
+<<script type="text/disabled">
 (function(){
   if (window.__CAL_STEP2_NORMAL__) return; window.__CAL_STEP2_NORMAL__ = true;
 
@@ -5825,6 +5831,48 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 
+
+<script>
+(function(){
+  if (window.__DUR_TABS_ENHANCED__) return; window.__DUR_TABS_ENHANCED__ = true;
+  const qsa = (s,root=document)=>Array.from((root||document).querySelectorAll(s));
+  const qs = (s,root=document)=> (root||document).querySelector(s);
+
+  function setDur(m){
+    // visual state
+    qsa('.dur,[data-min]').forEach(b=>{
+      const val = +b.getAttribute('data-min') || parseInt(b.textContent,10) || 0;
+      b.classList.toggle('btn-primary', val===m);
+      b.classList.toggle('btn-ghost', val!==m);
+    });
+    // keep in scope for pick()
+    window.scope = window.scope || {}; scope._durMin = m;
+    window.SEL   = window.SEL   || {}; SEL.duration_min = m;
+    const hidden = document.getElementById('consultDuration'); if (hidden) hidden.value = m;
+    // re-render slots for selected date if any
+    const iso = (window.scope && scope._selDate) || '';
+    if (iso && typeof renderSlots==='function') {
+      // new API expects (iso, freeMap)
+      try{ renderSlots(iso, window.__FREE__); }catch(_){}
+    }
+  }
+
+  // init state from existing active .dur
+  const active = qs('.dur.btn-primary, .dur.active');
+  if (active){
+    const m = +active.getAttribute('data-min') || parseInt(active.textContent,10) || 30;
+    setDur(m);
+  }
+
+  // bind clicks
+  document.addEventListener('click', (e)=>{
+    const btn = e.target.closest && e.target.closest('.dur,[data-min]');
+    if (!btn) return;
+    const m = +btn.getAttribute('data-min') || parseInt(btn.textContent,10) || 30;
+    setDur(m);
+  }, {capture:true});
+})();
+</script>
 </body>
 </html>
 
