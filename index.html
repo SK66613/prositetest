@@ -890,11 +890,32 @@ if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
       b.className = 'btn btn-ghost';
       b.textContent = time;
       b.dataset.time = time;
-      b.onclick = ()=>{
+      b.dataset.iso = iso;
+      b.onclick = async ()=>{
         qsa('button',wrap).forEach(x=>x.classList.remove('btn-primary','active'));
         b.classList.add('btn-primary','active');
-        // сохраняем выбор — твой код брони это увидит
         window.scope = window.scope || {}; scope._selTime = time;
+        window.SEL   = window.SEL   || {}; SEL.time = time;
+
+        // HOLD: remove visually and send hold_slot to GAS
+        const dur = (window.SEL && +SEL.duration_min) || (window.scope && +scope._durMin) || 30;
+        setTimeout(()=>{ try{ b.remove(); }catch(_){ } }, 120);
+        try{
+          const res = await (window.apiEvent ? window.apiEvent('hold_slot', { date: iso, time, duration_min: dur }) : Promise.resolve({ok:false}));
+          if (!res || res.ok===false){
+            // refresh month to sync availability
+            if (window.syncMonth) try{ await window.syncMonth(); }catch(_){}
+          } else {
+            // remove from local FREE cache
+            try{
+              const list = (window.__FREE__ && window.__FREE__[iso]) || [];
+              const idx = list.indexOf(time); if (idx>=0) list.splice(idx,1);
+            }catch(_){}
+          }
+        }catch(_){
+          if (window.syncMonth) try{ await window.syncMonth(); }catch(_){}
+        }
+      }; scope._selTime = time;
         window.SEL   = window.SEL   || {}; SEL.time = time;
       };
       wrap.appendChild(b);
@@ -3000,7 +3021,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbyjMOn6vxDyEdxrgpwLG80eRZ1i2Ve7emAlkckHZka2pAvjPEYQWq3brcTy3o4fjIOW/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbzq3gMBFDy5zKg9JuxLpQrSgvxQWbqTOMtwQdo3retYUsIA2ciM_9WzhhBVPmLJvpU/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
