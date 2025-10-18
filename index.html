@@ -1237,7 +1237,6 @@ if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
       const t = (b.dataset.time || b.textContent || '').trim();
       if (!t) return;
       const ok = allowed.has(t);
-      b.disabled = !ok;
       b.classList.toggle('muted', !ok);
       b.classList.toggle('off', !ok);
       if (!ok && b.classList.contains('btn-primary')) b.classList.remove('btn-primary','active');
@@ -1282,7 +1281,7 @@ if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
 </script>
 <style>
 /* мягкая деактивация слотов, чтобы было понятно пользователю */
-#slots .off, #slotsTime .off { pointer-events:none; opacity:.5; }
+#slots .off, #slotsTime .off { opacity:.5; }
 </style>
   
     
@@ -5871,6 +5870,64 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
     const m = +btn.getAttribute('data-min') || parseInt(btn.textContent,10) || 30;
     setDur(m);
   }, {capture:true});
+})();
+</script>
+
+<script>
+(function(){
+  if (window.__RENDERSLOTS_ADAPTOR__) return; window.__RENDERSLOTS_ADAPTOR__ = true;
+  // keep original (last defined) if exists
+  const modern = (function(){
+    // try to find our modern implementation body by scanning global for a function that accepts (iso, freeMap)
+    // but to be deterministic, re-implement a small delegator using the latest behavior from file:
+    return function renderSlotsModern(iso, freeMap){
+      try{
+        const wrap = document.querySelector('#slots,#slotsTime'); if (!wrap) return;
+        const arr = (freeMap && freeMap[iso]) || (window.__FREE__ && window.__FREE__[iso]) || [];
+        wrap.innerHTML = ''; wrap.classList.add('show');
+        if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+        arr.forEach(time=>{
+          const b = document.createElement('button');
+          b.className = 'btn btn-ghost'; b.textContent = time; b.dataset.time = time;
+          b.onclick = ()=>{
+            Array.from(wrap.querySelectorAll('button')).forEach(x=>x.classList.remove('btn-primary','active'));
+            b.classList.add('btn-primary','active');
+            window.scope = window.scope || {}; scope._selTime = time;
+            window.SEL   = window.SEL   || {}; SEL.time = time;
+          };
+          wrap.appendChild(b);
+        });
+      }catch(_){}
+    };
+  })();
+
+  window.renderSlots = function(){
+    const args = Array.from(arguments);
+    if (args.length >= 2){
+      // (iso, freeMap)
+      return modern(args[0], args[1]);
+    }else if (args.length === 1){
+      const x = args[0];
+      if (x && typeof x === 'string'){
+        window.__selDate = x;
+        return modern(x, window.__FREE__ || {});
+      }
+      if (x && typeof x === 'object' && x.getFullYear){
+        // Date
+        const iso = x.toISOString ? x.toISOString().slice(0,10) :
+                   (x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'));
+        window.__selDate = iso;
+        return modern(iso, window.__FREE__ || {});
+      }
+      // unknown -> try selected
+      const iso = (window.scope && scope._selDate) || window.__selDate || '';
+      if (iso) return modern(iso, window.__FREE__ || {});
+      return;
+    }else{
+      const iso = (window.scope && scope._selDate) || window.__selDate || '';
+      if (iso) return modern(iso, window.__FREE__ || {});
+    }
+  };
 })();
 </script>
 </body>
