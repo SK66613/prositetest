@@ -5809,6 +5809,73 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 
+
+<!-- ==== STEP3 STABLE: lock past days + auto-pick allowed slot after filter ==== -->
+<script>
+(function(){
+  if (window.__CAL_STEP3_STABLE__) return; window.__CAL_STEP3_STABLE__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const TZ  = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+  function todayISO(){
+    try{ return new Date().toLocaleString('sv-SE', { timeZone: TZ }).slice(0,10); }
+    catch(_){ return new Date().toISOString().slice(0,10); }
+  }
+
+  function lockPastDays(){
+    const today = todayISO();
+    qsa('#cal .cal-cell').forEach(cell=>{
+      if (cell.classList.contains('cal-dow') || cell.classList.contains('tail')) return;
+      const iso = cell.dataset.iso;
+      if (iso && iso < today){
+        cell.classList.add('off','muted');
+        cell.setAttribute('aria-disabled','true');
+      }
+    });
+  }
+
+  // run initially and on calendar mutations / month nav
+  setTimeout(lockPastDays, 120);
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')){
+      setTimeout(lockPastDays, 80);
+    }
+  });
+  const grid = qs('#cal .cal-grid');
+  if (grid){
+    new MutationObserver(()=>{ setTimeout(lockPastDays, 20); })
+      .observe(grid, { childList:true, subtree:true });
+  }
+
+  // ---- Auto-select first allowed time slot when needed ----
+  function autoPickFirstAllowed(){
+    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
+    const active  = wrap.querySelector('button.btn-primary,button.active');
+    const allowed = wrap.querySelector('button:not(.off):not([disabled])');
+    if (!active && allowed) allowed.click();
+  }
+
+  // On duration change or day click, ensure some allowed slot is selected
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest('.dur,[data-dur],[data-duration],input[name="duration"],#duration,select[name="duration"]')){
+      setTimeout(autoPickFirstAllowed, 60);
+    }
+    if (e.target.closest('#cal .cal-cell')){
+      setTimeout(autoPickFirstAllowed, 80);
+    }
+  });
+
+  // Observe slots container for async renders and re-filter events
+  const wrap = qs('#slots,#slotsTime');
+  if (wrap){
+    new MutationObserver(()=>{ setTimeout(autoPickFirstAllowed, 10); })
+      .observe(wrap, { childList:true, subtree:true });
+  }
+})();
+</script>
+
 </body>
 </html>
 
