@@ -210,7 +210,7 @@
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .cal-cell{height:36px;display:grid;place-items:center;border-radius:10px;border:1px solid rgba(255,255,255,.08);
   background:rgba(255,255,255,.03); font-weight:600; cursor:pointer; transition:transform .15s ease, background .15s ease, color .15s ease}
-.cal-cell:hover{transform:translateY(-1px);}
+.cal-cell:hover{}
 .cal-cell.muted{opacity:.35}
 .cal-cell.off{opacity:.25; pointer-events:none}
 .cal-cell.sel{color:#fff; background:linear-gradient(135deg, var(--primary), var(--mint)); border-color:transparent}
@@ -686,14 +686,7 @@ html,body{-webkit-text-size-adjust:100%}
     return Array.isArray(arr) && arr.length>0;
   }
 
-  function applyDaysState(y, m){
-    const grid = document.querySelector('#cal .cal-grid');
-    if(!grid) return;
-    grid.querySelectorAll('.cal-cell').forEach(cell=>{
-      if(cell.classList.contains('cal-dow')) return;
-      const day = (cell.dataset.day || cell.textContent || '').trim();
-      if(!day || /\D/.test(day)) return;
-      const iso = `${y}-${m}-${dd2(day)}`;
+  function applyDaysState(){ return; }-${m}-${dd2(day)}`;
       cell.dataset.iso = iso;
       const hasKey = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
       if (!hasKey) return;
@@ -733,14 +726,7 @@ html,body{-webkit-text-size-adjust:100%}
     });
   }
 
-  async function syncMonthAndDays(){
-    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
-    const ym = parseHeadYM(); if(!ym) return;
-    const __my = ++window.__CAL_REQ_ID__;
-    await loadFreeSlotsForMonth(ym.y, ym.m);
-    if (__my !== window.__CAL_REQ_ID__) return; // stale
-    applyDaysState(ym.y, ym.m);
-  }
+  async function syncMonthAndDays(){ return; }
 
   // Инициализация после первой отрисовки календаря
   setTimeout(syncMonthAndDays, 0);
@@ -767,9 +753,7 @@ html,body{-webkit-text-size-adjust:100%}
   const _origApiEvent = window.apiEvent;
   window.apiEvent = async function(type, payload){
     const res = await _origApiEvent(type, payload);
-    if(res && res.ok===false && /slot_unavailable/.test(res.error||'')){
-      try{ await syncMonthAndDays(); }catch(_){}
-    }
+    if(res && res.ok===false && /slot_unavailable/.test(res.error||'')){ try{ await syncMonth(); }catch(_){} }
     return res;
   };
 })();
@@ -778,7 +762,8 @@ html,body{-webkit-text-size-adjust:100%}
 <script>
 /* === Calendar × GAS (V5 minimal, robust) === */
 (function(){
-  if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
+  if (window.__CAL_GAS_V5__) return;
+  let __CAL_REQ__ = 0; let __SYNC_SCHED__ = 0; window.__CAL_GAS_V5__ = true;
 
   const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
   const dd2 = n => String(n).padStart(2,'0');
@@ -842,8 +827,21 @@ html,body{-webkit-text-size-adjust:100%}
     qsa('.cal-cell', grid).forEach(cell=>{
       if (cell.classList.contains('cal-dow')) return;
       const day = (cell.dataset.day || cell.textContent || '').trim();
-      if (!day || /\D/.test(day)) return;
+      if (!day || \D/.test(day)) return;
       const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      cell.dataset.iso = iso;
+      // default state: OFF
+      cell.classList.add('off','muted');
+      cell.setAttribute('aria-disabled','true');
+      const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
+      if (!hasKey) return;
+      const arr = Array.isArray(freeMap[iso]) ? freeMap[iso] : [];
+      if (arr.length > 0){
+        cell.classList.remove('off','muted');
+        cell.removeAttribute('aria-disabled');
+      }
+    });
+  }-${ym.m}-${dd2(day)}`;
       cell.dataset.iso = iso;
 
       const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
@@ -881,20 +879,24 @@ html,body{-webkit-text-size-adjust:100%}
     });
   }
 
-  async function syncMonth(){
-    const ym = parseYM(); if (!ym) return;                        // нет заголовка месяца
+  async async function syncMonth(){
+    const ym = parseYM(); if (!ym) return;
+    const token = ++__CAL_REQ__;
     const data = await loadFreeSlots(ym.y, ym.m); if (!data) return;
+    if (token !== __CAL_REQ__) return;
     window.__FREE__ = data.days || {};
+    applyDays(ym, window.__FREE__);
+  };
     applyDays(ym, window.__FREE__);
   }
 
   // Инициализация (даём календарю отрисоваться)
-  setTimeout(syncMonth, 60);
+  if (!__SYNC_SCHED__) { __SYNC_SCHED__ = 1; queueMicrotask(()=>{ __SYNC_SCHED__ = 0; syncMonth(); }); }
 
   // Перелистывание месяцев
   document.addEventListener('click', e=>{
     if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) {
-      setTimeout(syncMonth, 30);
+      if (!__SYNC_SCHED__) { __SYNC_SCHED__ = 1; queueMicrotask(()=>{ __SYNC_SCHED__ = 0; syncMonth(); }); }
     }
   });
 
@@ -5569,7 +5571,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 
   // перелистывание месяцев
   document.addEventListener('click', (e)=>{
-    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) setTimeout(syncMonth, 30);
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) if (!__SYNC_SCHED__) { __SYNC_SCHED__ = 1; queueMicrotask(()=>{ __SYNC_SCHED__ = 0; syncMonth(); }); }
   });
 
   // выбор дня -> слоты
@@ -5809,71 +5811,6 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 
-
-<!-- Cloudflare Worker bridge: replaces GAS JSONP with fetch to WORKER_BASE -->
-<script>
-(function(){
-  try{
-    var C = window.APP_CONFIG = window.APP_CONFIG || {};
-    var BASE = String((C.WORKER_BASE || C.GAS_WEBHOOK || '')).replace(/\/+$/,'');
-    if (!BASE){ console.warn('[CF bridge] WORKER_BASE/GAS_WEBHOOK not set'); return; }
-
-    // Reuse this for any existing code that reads GAS_WEBHOOK
-    C.GAS_WEBHOOK = BASE;
-
-    function authParams(){
-      var p = {};
-      try{
-        var tg = (window.Telegram && Telegram.WebApp) ? Telegram.WebApp : null;
-        if (tg && tg.initData) p.tg_init = tg.initData;
-      }catch(e){}
-      if (!p.tg_init && C.API_KEY) p.key = C.API_KEY;
-      return p;
-    }
-
-    async function getJSON(url){
-      const r = await fetch(url.toString(), { credentials: 'omit' });
-      return await r.json();
-    }
-
-    // Worker doesn't have "bootstrap"; map to ping for health check
-    window.apiBootstrap = async function(){
-      var u = new URL(BASE);
-      u.searchParams.set('mode','ping');
-      var auth = authParams();
-      Object.keys(auth).forEach(function(k){ u.searchParams.set(k, auth[k]); });
-      return getJSON(u);
-    };
-
-    // Main event endpoint
-    window.apiEvent = async function(type, data){
-      data = data || {};
-      var u = new URL(BASE);
-      u.searchParams.set('mode','event');
-      u.searchParams.set('type', type || (data && data.type) || '');
-      var auth = authParams();
-      Object.keys(auth).forEach(function(k){ u.searchParams.set(k, auth[k]); });
-      const r = await fetch(u.toString(), {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(data)
-      });
-      return r.json();
-    };
-
-    // Backward-compatible bridge used across the page
-    window.__postGAS = async function(payload){
-      payload = payload || {};
-      var t = payload.type || (('date' in payload && 'time' in payload) ? 'consult_booking' : '');
-      return window.apiEvent(t, payload);
-    };
-
-    console.log('[CF bridge] ready', { base: BASE, hasKey: !!C.API_KEY });
-  }catch(e){
-    console.warn('[CF bridge] failed:', e);
-  }
-})();
-</script>
 </body>
 </html>
 
@@ -6084,7 +6021,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   // wire up clicks
   document.addEventListener('click', (e)=>{
     if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
-      setTimeout(syncMonth, 60);
+      if (!__SYNC_SCHED__) { __SYNC_SCHED__ = 1; queueMicrotask(()=>{ __SYNC_SCHED__ = 0; syncMonth(); }); }
     }
   });
   document.addEventListener('click', (e)=>{
