@@ -5658,7 +5658,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   }
 
   // ---------- MONTH CACHE (RAM + sessionStorage) ----------
-  const TTL_MS = 3 * 60 * 1000; // 3 минуты
+  const TTL_MS = 60 * 1000; // 3 минуты
   const RAM = new Map();
   function keyYM(y,m){ return `${y}-${m}`; }
   function getCache(y,m){
@@ -5965,6 +5965,153 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   }
 })();
 </script>
+
+
+<!-- ==== STEP5 HARDEN: fail-soft syncMonth, single booking resync, no-dates stub, extra race-guards ==== -->
+<script>
+(function(){
+  if (window.__CAL_STEP5_HARDEN__) return; window.__CAL_STEP5_HARDEN__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = (n)=>String(n).padStart(2,'0');
+  const TZ  = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+  function fallbackYM(){
+    const now = new Date();
+    return { y:String(now.getFullYear()), m: dd2(now.getMonth()+1) };
+  }
+
+  // ---------- Fail-soft syncMonth (V5) ----------
+  if (typeof window.syncMonth === 'function' && typeof window.fetchFreeSlotsMonth === 'function'){
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
+    const _orig_syncMonth = window.syncMonth;
+    window.syncMonth = async function(){
+      const ym = (typeof window.parseYM==='function' && window.parseYM()) || fallbackYM();
+      const my = ++window.__CAL_REQ_ID__;
+      let j = null;
+      try { j = await window.fetchFreeSlotsMonth(ym.y, ym.m); } catch(_){ j = null; }
+      if (my !== window.__CAL_REQ_ID__) return;  // устарел
+
+      if (!j || j.ok === false || !j.days){
+        try{
+          if (typeof window.getCache === 'function'){
+            const c = window.getCache(ym.y, ym.m);
+            if (c && c.days){
+              window.__FREE__ = c.days;
+              window.__GRAN__ = c.gran || 30;
+              if (typeof window.applyDays === 'function') window.applyDays(ym, window.__FREE__);
+              else if (typeof window.applyDaysFromMap === 'function') window.applyDaysFromMap(ym, window.__FREE__);
+            }
+          }
+        }catch(_){}
+        return;
+      }
+
+      window.__FREE__ = j.days || {};
+      window.__GRAN__ = j.gran || 30;
+      if (typeof window.applyDays === 'function') window.applyDays(ym, window.__FREE__);
+      else if (typeof window.applyDaysFromMap === 'function') window.applyDaysFromMap(ym, window.__FREE__);
+    };
+  }
+
+  // ---------- Single booking resync (dedup) ----------
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if ((type==='consult_booking' || (data && data.type==='consult_booking')) && res && res.ok){
+          if (window.__CAL_BOOKING_HANDLED__) return res;
+          window.__CAL_BOOKING_HANDLED__ = true;
+          const date = (data && data.date) || (window.scope && (scope._selDate||scope.selDate)) || '';
+          if (date && window.__FREE__ && window.__FREE__[date]){
+            const step = window.__GRAN__ || 30;
+            const dur  = (data && +data.duration_min) || (window.scope && +scope._durMin) || 30;
+            const start = (data && data.time) || (window.scope && (scope._selTime||scope.selTime));
+            if (start){
+              const toMin = s => { const [h,m]=s.split(':').map(Number); return h*60+m; };
+              const add   = (s,dm)=>{ const t=toMin(s)+dm; const H=String(Math.floor(t/60)).padStart(2,'0'); const M=String(t%60).padStart(2,'0'); return H+':'+M; };
+              const need = Math.max(1, Math.ceil(dur/step));
+              const arr = window.__FREE__[date];
+              for (let i=0;i<need;i++){
+                const hh = add(start, i*step);
+                const idx = arr.indexOf(hh);
+                if (idx>=0) arr.splice(idx,1);
+              }
+            }
+          }
+          try {
+            const ym = { y: date.slice(0,4), m: date.slice(5,7) };
+            if (typeof window.invalidateMonth === 'function') window.invalidateMonth(ym.y, ym.m);
+          } catch(_){}
+          try {
+            if (typeof window.syncMonth === 'function') await window.syncMonth();
+          } catch(_){}
+          setTimeout(()=>{ window.__CAL_BOOKING_HANDLED__ = false; }, 300);
+        }
+      }catch(_){}
+      return res;
+    };
+  })();
+
+  // ---------- No-dates stub ----------
+  (function(){
+    function showNoDatesStub(on){
+      let stub = document.getElementById('noDatesStub');
+      if (on){
+        if (!stub){
+          stub = document.createElement('div');
+          stub.id='noDatesStub';
+          stub.className='cal-stub';
+          stub.textContent='Нет свободных дат в этом месяце';
+          (qs('#cal')||document.body).appendChild(stub);
+        }
+      } else if (stub){ stub.remove(); }
+    }
+    function checkAndToggleStub(){
+      const any = qsa('#cal .cal-cell[data-iso]:not(.off):not(.tail)').length > 0;
+      showNoDatesStub(!any);
+    }
+    ['applyDays','applyDaysFromMap'].forEach(fnName=>{
+      const orig = window[fnName];
+      if (typeof orig === 'function'){
+        window[fnName] = function(){
+          const r = orig.apply(this, arguments);
+          try { checkAndToggleStub(); } catch(_){ }
+          return r;
+        };
+      }
+    });
+    setTimeout(()=>{ try{ checkAndToggleStub(); }catch(_){ } }, 200);
+  })();
+
+  // ---------- Debounce for month navigation ----------
+  (function(){
+    if (!window.__CAL_NAV_DEBOUNCE__){
+      window.__CAL_NAV_DEBOUNCE__ = true;
+      let t = null;
+      document.addEventListener('click', (e)=>{
+        if (e.target.closest && (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
+          if (t) clearTimeout(t);
+          t = setTimeout(()=>{ try{ window.syncMonth && window.syncMonth(); }catch(_){ } }, 80);
+        }
+      });
+    }
+  })();
+})();
+</script>
+
+<style>
+  .cal-stub{
+    margin: 8px 0 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,.08);
+    font-size: 13px;
+    opacity: .8;
+  }
+</style>
 
 </body>
 </html>
