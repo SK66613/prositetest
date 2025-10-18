@@ -2977,11 +2977,10 @@ const pages = document.querySelectorAll('section.page');
 
 <script>
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
-window.APP_CONFIG = {
-  TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycby0aRMT7KnrrQV0_T3fiygS8FnNDhEepTxxdGxVmEO6ccw2hVk2kfemSt8zNhvNSKbS/exec',                        // вставишь URL Apps Script
-  API_KEY: '',                            // опционально
-  USE_TG_SIGNATURE: true
+const APP_CONFIG = {
+  WORKER_BASE: "https://tg-calendar.cyberian13.workers.dev/",
+  API_KEY: "dev-123",
+  TZ: ...
 };
 
 // helpers
