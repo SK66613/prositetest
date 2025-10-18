@@ -891,33 +891,12 @@ if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
       b.textContent = time;
       b.dataset.time = time;
       b.dataset.iso = iso;
-      b.onclick = async ()=>{
-        qsa('button',wrap).forEach(x=>x.classList.remove('btn-primary','active'));
+      b.onclick = async () => {
+        // Visual select
+        qsa('button', wrap).forEach(x=>{ x.classList.remove('btn-primary','active'); x.classList.add('btn-ghost'); });
         b.classList.add('btn-primary','active');
-        window.scope = window.scope || {}; scope._selTime = time;
-        window.SEL   = window.SEL   || {}; SEL.time = time;
-
-        // HOLD: remove visually and send hold_slot to GAS
-        const dur = (window.SEL && +SEL.duration_min) || (window.scope && +scope._durMin) || 30;
-        setTimeout(()=>{ try{ b.remove(); }catch(_){ } }, 120);
-        try{
-          const res = await (window.apiEvent ? window.apiEvent('hold_slot', { date: iso, time, duration_min: dur }) : Promise.resolve({ok:false}));
-          if (!res || res.ok===false){
-            // refresh month to sync availability
-            if (window.syncMonth) try{ await window.syncMonth(); }catch(_){}
-          } else {
-            // remove from local FREE cache
-            try{
-              const list = (window.__FREE__ && window.__FREE__[iso]) || [];
-              const idx = list.indexOf(time); if (idx>=0) list.splice(idx,1);
-            }catch(_){}
-          }
-        }catch(_){
-          if (window.syncMonth) try{ await window.syncMonth(); }catch(_){}
-        }
-      }; scope._selTime = time;
-        window.SEL   = window.SEL   || {}; SEL.time = time;
-      };
+        b.classList.remove('btn-ghost');
+        window.scope = window.scope || {};
       wrap.appendChild(b);
     });
   }
@@ -5995,6 +5974,36 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 </script>
+
+<script>
+// --- Unified apiEvent: attach tg_init or fallback API key for Desktop/browser ---
+(function(){
+  const cfg = window.APP_CONFIG || (window.APP_CONFIG = {});
+  const GAS = cfg.GAS_WEBHOOK;
+  if (!window.apiEvent) window.apiEvent = async function(type, data){ data = data || {}; return { ok:false, error:'no_backend' }; };
+
+  const prev = window.apiEvent;
+  window.apiEvent = async function(type, data){
+    data = data || {};
+    try{
+      if (!data.tg_init && window.Telegram && Telegram.WebApp) {
+        data.tg_init = Telegram.WebApp.initData || '';
+      }
+      if ((!data.tg_init || data.tg_init.length === 0) && cfg.API_KEY) {
+        data.key = cfg.API_KEY; // Desktop/browser fallback
+      }
+    }catch(_){}
+    if (typeof prev === 'function') return prev(type, data);
+    try {
+      const r = await fetch(GAS, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type, ...data }) });
+      return await r.json();
+    } catch(e){
+      return { ok:false, error: String(e) };
+    }
+  };
+})();
+</script>
+
 </body>
 </html>
 
