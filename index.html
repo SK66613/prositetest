@@ -2977,10 +2977,11 @@ const pages = document.querySelectorAll('section.page');
 
 <script>
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
-const APP_CONFIG = {
-  WORKER_BASE: "https://tg-calendar.cyberian13.workers.dev/",
-  API_KEY: "dev-123",
-  TZ: ...
+window.APP_CONFIG = {
+  TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
+  API_KEY: '',                            // опционально
+  USE_TG_SIGNATURE: true
 };
 
 // helpers
@@ -5808,6 +5809,71 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 
+
+<!-- Cloudflare Worker bridge: replaces GAS JSONP with fetch to WORKER_BASE -->
+<script>
+(function(){
+  try{
+    var C = window.APP_CONFIG = window.APP_CONFIG || {};
+    var BASE = String((C.WORKER_BASE || C.GAS_WEBHOOK || '')).replace(/\/+$/,'');
+    if (!BASE){ console.warn('[CF bridge] WORKER_BASE/GAS_WEBHOOK not set'); return; }
+
+    // Reuse this for any existing code that reads GAS_WEBHOOK
+    C.GAS_WEBHOOK = BASE;
+
+    function authParams(){
+      var p = {};
+      try{
+        var tg = (window.Telegram && Telegram.WebApp) ? Telegram.WebApp : null;
+        if (tg && tg.initData) p.tg_init = tg.initData;
+      }catch(e){}
+      if (!p.tg_init && C.API_KEY) p.key = C.API_KEY;
+      return p;
+    }
+
+    async function getJSON(url){
+      const r = await fetch(url.toString(), { credentials: 'omit' });
+      return await r.json();
+    }
+
+    // Worker doesn't have "bootstrap"; map to ping for health check
+    window.apiBootstrap = async function(){
+      var u = new URL(BASE);
+      u.searchParams.set('mode','ping');
+      var auth = authParams();
+      Object.keys(auth).forEach(function(k){ u.searchParams.set(k, auth[k]); });
+      return getJSON(u);
+    };
+
+    // Main event endpoint
+    window.apiEvent = async function(type, data){
+      data = data || {};
+      var u = new URL(BASE);
+      u.searchParams.set('mode','event');
+      u.searchParams.set('type', type || (data && data.type) || '');
+      var auth = authParams();
+      Object.keys(auth).forEach(function(k){ u.searchParams.set(k, auth[k]); });
+      const r = await fetch(u.toString(), {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+      });
+      return r.json();
+    };
+
+    // Backward-compatible bridge used across the page
+    window.__postGAS = async function(payload){
+      payload = payload || {};
+      var t = payload.type || (('date' in payload && 'time' in payload) ? 'consult_booking' : '');
+      return window.apiEvent(t, payload);
+    };
+
+    console.log('[CF bridge] ready', { base: BASE, hasKey: !!C.API_KEY });
+  }catch(e){
+    console.warn('[CF bridge] failed:', e);
+  }
+})();
+</script>
 </body>
 </html>
 
