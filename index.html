@@ -371,6 +371,217 @@ html,body{-webkit-text-size-adjust:100%}
 
 </style>
 
+<!-- ==== DEV TEST (встраивается на home, видно только с ?debug=1) ==== -->
+<style>
+  #dev-fab{position:fixed;right:14px;bottom:14px;z-index:9999;border:0;border-radius:999px;padding:12px 14px;background:#2b52ff;color:#fff;font:600 13px system-ui;box-shadow:0 8px 22px rgba(0,0,0,.35);cursor:pointer;display:none}
+  #dev-panel{position:fixed;right:14px;bottom:64px;z-index:9999;width:320px;max-width:92vw;background:#0f1221;color:#c9d1ff;border:1px solid #2a3157;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:none;overflow:hidden}
+  #dev-panel .hdr{padding:10px 12px;border-bottom:1px solid #2a3157;display:flex;gap:8px;align-items:center}
+  #dev-panel .hdr .ttl{font-weight:600}
+  #dev-panel .hdr .badge{margin-left:auto;font-size:11px;opacity:.8}
+  #dev-panel .body{padding:12px;display:flex;flex-direction:column;gap:8px}
+  #dev-panel button{padding:10px 12px;border:0;border-radius:10px;color:#fff;cursor:pointer}
+  #btn-test-bootstrap{background:#2b52ff}
+  #btn-test-booking{background:#3aa76d}
+  #dev-log{background:#0b0e1a;border:1px solid #2a3157;border-radius:10px;padding:10px;max-height:180px;overflow:auto;white-space:pre-wrap}
+</style>
+
+<button id="dev-fab">DEV</button>
+<div id="dev-panel">
+  <div class="hdr">
+    <div class="ttl">DEV • GAS quick test</div>
+    <div class="badge" id="dev-badge"></div>
+  </div>
+  <div class="body">
+    <button id="btn-test-bootstrap">1) Bootstrap</button>
+    <button id="btn-test-booking">2) Test consult_booking</button>
+    <div id="dev-log"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const params = new URL(location.href).searchParams;
+  const debugOn = params.get('debug') === '1';
+  const fab = document.getElementById('dev-fab');
+  const panel = document.getElementById('dev-panel');
+  const badge = document.getElementById('dev-badge');
+  const logBox = document.getElementById('dev-log');
+
+  if(!debugOn){ return; } // показываем только с ?debug=1
+
+  // если есть секция #home — отлично, но панель всё равно фиксом поверх
+  function log(msg, obj){
+    const line = '['+new Date().toLocaleTimeString()+'] '+msg+(obj?' '+JSON.stringify(obj):'');
+    console.log('[DEV]', msg, obj||'');
+    logBox.textContent = line + '\n' + logBox.textContent;
+  }
+
+  // быстрый бейдж состояния Telegram WebApp
+  const inTG = !!(window.Telegram && Telegram.WebApp && Telegram.WebApp.initData);
+  const initLen = (Telegram && Telegram.WebApp && (Telegram.WebApp.initData||'').length) || 0;
+  badge.textContent = inTG ? ('TG OK • initData '+initLen) : 'not in Telegram';
+  if (!inTG) log('⚠ Открой через кнопку мини-аппа. Сейчас не в Telegram.');
+
+  // показать FAB и панель (по клику)
+  fab.style.display = 'inline-flex';
+  fab.onclick = () => { panel.style.display = panel.style.display==='none'?'block':'none'; };
+  // по умолчанию сразу открыть
+  panel.style.display = 'block';
+
+  // хелперы API (если уже есть у тебя — будут переопределены ниже)
+  async function apiBootstrapFallback(){
+    const tgInit = Telegram.WebApp.initData;
+    const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK) + '?mode=bootstrap&tg_init=' + encodeURIComponent(tgInit);
+    const r = await fetch(url, { method: 'GET' });
+    return r.json();
+  }
+  async function apiEventFallback(type, extra={}){
+    const tgInit = Telegram.WebApp.initData;
+    const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ type, tg_init: tgInit, ...extra })
+    });
+    return r.json();
+  }
+  const apiBootstrap = (window.apiBootstrap || apiBootstrapFallback);
+  const apiEvent = (window.apiEvent || apiEventFallback);
+
+  document.getElementById('btn-test-bootstrap').addEventListener('click', async ()=>{
+    try{
+      log('→ bootstrap()…');
+      const res = await apiBootstrap();
+      log('← bootstrap()', res);
+      if(res && res.ok) log('Profile', res.profile || {});
+    }catch(e){ log('bootstrap error', String(e)); }
+  });
+
+  document.getElementById('btn-test-booking').addEventListener('click', async ()=>{
+    try{
+      const now = new Date(Date.now() + 15*60*1000);
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth()+1).padStart(2,'0');
+      const dd = String(now.getDate()).padStart(2,'0');
+      const hh = String(now.getHours()).padStart(2,'0');
+      const mi = String(now.getMinutes()).padStart(2,'0');
+      const date = `${yyyy}-${mm}-${dd}`;
+      const time = `${hh}:${mi}`;
+
+      const payload = { date, time, duration_min: 30, format: 'call', contact: '@dev_test' };
+      log('→ consult_booking', payload);
+      const res = await apiEvent('consult_booking', payload);
+      log('← consult_booking', res);
+      if(res && res.ok) log('✓ Проверь лист consult_bookings — должна появиться новая строка.');
+    }catch(e){ log('consult_booking error', String(e)); }
+  });
+
+  log('DEV-панель готова. Нажми кнопки по порядку.');
+})();
+</script>
+<!-- ==== /DEV TEST ==== -->
+<script>
+(function(){
+  const cont = document.getElementById('dev-panel') || document.body;
+  const btn = document.createElement('button');
+  btn.id = 'btn-echo-sign';
+  btn.textContent = 'Echo Sign';
+  btn.style.marginLeft = '8px';
+  cont.appendChild(btn);
+
+  btn.addEventListener('click', async ()=>{
+    try{
+      const res = await _jsonp(APP_CONFIG.GAS_WEBHOOK, {
+        mode: 'echo_sign',
+        tg_init: (Telegram.WebApp && Telegram.WebApp.initData) || ''
+      });
+      console.log('[echo_sign]', res);
+      alert('equal=' + res.equal + ', ageSec=' + res.ageSec);
+    }catch(e){
+      console.error(e);
+      alert('echo_sign error: ' + e);
+    }
+  });
+})();
+</script>
+
+<script>
+(function () {
+  // ==== маленький JSONP-хелпер, если вдруг своего нет ====
+  if (typeof window._jsonp !== 'function') {
+    window._jsonp = function (baseUrl, params) {
+      return new Promise(function (resolve, reject) {
+        const cbName = 'cb_' + Math.random().toString(36).slice(2);
+        const url = new URL(baseUrl);
+        Object.entries(params || {}).forEach(([k, v]) => url.searchParams.set(k, String(v)));
+        url.searchParams.set('callback', cbName);
+
+        const s = document.createElement('script');
+        s.src = url.toString();
+        s.onerror = () => { cleanup(); reject(new Error('JSONP load error')); };
+
+        function cleanup() {
+          try { delete window[cbName]; } catch(_) { window[cbName] = undefined; }
+          if (s.parentNode) s.parentNode.removeChild(s);
+        }
+        window[cbName] = function (data) { cleanup(); resolve(data); };
+        document.head.appendChild(s);
+      });
+    };
+  }
+
+  // ==== утилиты логирования ====
+  const logBox = document.getElementById('dev-log');
+  function logLine(msg, obj) {
+    const line = `[${new Date().toLocaleTimeString()}] ${msg}` + (obj ? ' ' + JSON.stringify(obj) : '');
+    console.log('[DEV]', msg, obj || '');
+    if (logBox) {
+      logBox.textContent = line + '\n' + logBox.textContent;
+    } else {
+      // если нет dev-log — создадим поверх
+      let box = document.getElementById('dev-log-fallback');
+      if (!box) {
+        box = document.createElement('pre');
+        box.id = 'dev-log-fallback';
+        box.style.cssText = 'position:fixed;left:8px;bottom:8px;right:8px;max-height:40vh;overflow:auto;background:#0b1220;color:#9feaff;padding:8px;border-radius:8px;font:12px/1.4 ui-monospace,monospace;z-index:99999';
+        document.body.appendChild(box);
+      }
+      box.textContent = line + '\n' + box.textContent;
+    }
+  }
+
+  // ==== кнопка Echo Sign в DEV-панели ====
+  (function ensureEchoButton() {
+    const devPanel = document.getElementById('dev-panel') || document.getElementById('dev') || document.body;
+    let btn = document.getElementById('btn-echo-sign');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'btn-echo-sign';
+      btn.textContent = 'Echo Sign (diag)';
+      btn.style.cssText = 'margin:8px 0; padding:10px 14px; border-radius:10px; background:#444cf7; color:#fff; border:none; cursor:pointer;';
+      devPanel.appendChild(btn);
+    }
+    btn.onclick = devEchoSign;
+  })();
+
+  // ==== сама диагностика подписи ====
+  async function devEchoSign() {
+    try {
+      const isTg = !!(window.Telegram && Telegram.WebApp);
+      const platform = isTg ? Telegram.WebApp.platform : 'no-telegram';
+      const userId   = isTg ? (Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) : null;
+      const initData = isTg ? (Telegram.WebApp.initData || '') : '';
+      const lenInit  = initData.length;
+      const encInit  = encodeURIComponent(initData);
+      const lenEnc   = encInit.length;
+
+      logLine('TG context', { platform, userId, lenInit, lenEnc });
+
+      if (!lenInit) {
+        alert('initData пустой — это не WebApp-контекст. Открой через кнопку бота.');
+        return;
+      }
+
       // JSONP на GAS echo_sign
       const gas = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK) || '';
       if (!gas) { alert('APP_CONFIG.GAS_WEBHOOK пуст'); return; }
@@ -484,6 +695,8 @@ html,body{-webkit-text-size-adjust:100%}
       if(!day || /\D/.test(day)) return;
       const iso = `${y}-${m}-${dd2(day)}`;
       cell.dataset.iso = iso;
+      const hasKey = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
+      if (!hasKey) return;
       if(!isDayFree(iso)){
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
@@ -521,8 +734,11 @@ html,body{-webkit-text-size-adjust:100%}
   }
 
   async function syncMonthAndDays(){
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
     const ym = parseHeadYM(); if(!ym) return;
+    const __my = ++window.__CAL_REQ_ID__;
     await loadFreeSlotsForMonth(ym.y, ym.m);
+    if (__my !== window.__CAL_REQ_ID__) return; // stale
     applyDaysState(ym.y, ym.m);
   }
 
@@ -729,6 +945,185 @@ html,body{-webkit-text-size-adjust:100%}
 /* На случай, если стилей нет — сделаем «приглушение» */
 .cal-cell.off { pointer-events:none; }
 .muted { opacity:.5; }
+</style>
+
+<script>
+/* ===== DEV PANEL & AUDIT (включается по ?dev=1 или localStorage.dev=1) ===== */
+(function(){
+  const DEV = /[?&]dev=1/.test(location.search) || localStorage.getItem('dev')==='1';
+  if (!DEV) return;
+  window.__DEV__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = n=>String(n).padStart(2,'0');
+  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+
+  // ---------- UI ----------
+  const box = document.createElement('div');
+  box.id = 'devPanel';
+  box.innerHTML = `
+    <div class="dev-head">DEV</div>
+    <div class="dev-body">
+      <div class="row">
+        <label>GAS_WEBHOOK</label>
+        <input id="devGas" placeholder="https://script.google.com/macros/s/.../exec">
+      </div>
+      <div class="row">
+        <label>API_KEY (для браузера)</label>
+        <input id="devKey" placeholder="если ALLOW_API_KEY_FALLBACK=true">
+      </div>
+      <div class="row">
+        <button id="devPing">Ping</button>
+        <button id="devSlots">Free Slots</button>
+        <button id="devAudit">Аудит календаря</button>
+      </div>
+      <div class="row">
+        <label>Тест booking:</label>
+        <input id="devContact" placeholder="@username / +7...">
+        <button id="devBook">consult_booking</button>
+      </div>
+      <pre id="devLog"></pre>
+    </div>`;
+  document.body.appendChild(box);
+
+  const $ = id => box.querySelector(id);
+  const log = (m,obj)=>{ const t = new Date().toLocaleTimeString(); const s = typeof obj==='undefined' ? '' : ' ' + JSON.stringify(obj); $('#devLog').textContent += `[${t}] ${m}${s}\n`; };
+  const cfg = window.APP_CONFIG = window.APP_CONFIG || {};
+  $('#devGas').value = cfg.GAS_WEBHOOK || localStorage.getItem('GAS_WEBHOOK') || '';
+  $('#devKey').value = cfg.API_KEY || localStorage.getItem('API_KEY') || '';
+  $('#devContact').value = localStorage.getItem('DEV_CONTACT') || '';
+
+  // сохраняем значения
+  ['devGas','devKey','devContact'].forEach(id=>{
+    $( '#'+id ).addEventListener('change', ()=>{
+      if (id==='devGas'){ cfg.GAS_WEBHOOK = $('#devGas').value; localStorage.setItem('GAS_WEBHOOK', cfg.GAS_WEBHOOK); }
+      if (id==='devKey'){ cfg.API_KEY = $('#devKey').value; localStorage.setItem('API_KEY', cfg.API_KEY); }
+      if (id==='devContact'){ localStorage.setItem('DEV_CONTACT', $('#devContact').value); }
+    });
+  });
+
+  function parseYM(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim().toLowerCase(); // "Октябрь 2025"
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
+    if (!m) return null;
+    const mm = RU2MM[m[1].slice(0,3).replace('ё','е')];
+    return mm ? { y: m[2], m: mm } : null;
+  }
+
+  async function fetchJSON(u){
+    const r = await fetch(u.toString(), { credentials:'omit' });
+    const j = await r.json().catch(()=>null);
+    return { ok:r.ok, status:r.status, data:j };
+  }
+
+  async function ping(){
+    const base = cfg.GAS_WEBHOOK; if(!base){ log('⛔ нет GAS_WEBHOOK'); return; }
+    const u = new URL(base); u.searchParams.set('mode','ping');
+    const {data} = await fetchJSON(u); log('ping', data);
+  }
+
+  async function getFreeSlots(){
+    const base = cfg.GAS_WEBHOOK; if(!base){ log('⛔ нет GAS_WEBHOOK'); return null; }
+    const ym = parseYM(); if(!ym){ log('⛔ не вижу заголовок месяца'); return null; }
+    const first = `${ym.y}-${ym.m}-01`;
+    const last  = `${ym.y}-${ym.m}-${dd2(new Date(+ym.y,+ym.m,0).getDate())}`;
+    const u = new URL(base);
+    u.searchParams.set('mode','free_slots');
+    u.searchParams.set('from', first);
+    u.searchParams.set('to',   last);
+    u.searchParams.set('gran','30');
+    u.searchParams.set('lead_min','120');
+    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+    try{
+      const tgi = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
+      if (tgi) u.searchParams.set('tg_init', tgi);
+      else if (cfg.API_KEY) u.searchParams.set('key', cfg.API_KEY);
+    }catch(_){}
+    const {data} = await fetchJSON(u);
+    log('free_slots', data);
+    if (data && data.ok) window.__FREE__ = data.days || {};
+    return data;
+  }
+
+  function auditCalendar(){
+    const grid = qs('#cal .cal-grid'); if(!grid){ log('⛔ нет .cal-grid'); return; }
+    const ym = parseYM(); if(!ym){ log('⛔ не вижу месяц/год'); return; }
+    let bad=0, ok=0;
+    qsa('.cal-cell', grid).forEach(cell=>{
+      if (cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if (!day || /\D/.test(day)) return;
+      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
+      const fromSrv = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
+      if (!fromSrv) { cell.style.outline = ''; return; }
+      const arr = window.__FREE__[iso] || [];
+      const shouldOff = !(Array.isArray(arr) && arr.length>0);
+      const isOff = cell.classList.contains('off') || cell.getAttribute('aria-disabled')==='true';
+      if (shouldOff !== isOff){
+        cell.style.outline = '2px solid #e53935'; bad++;
+      } else {
+        cell.style.outline = '2px solid #43a047'; ok++;
+      }
+    });
+    log('Аудит календаря — ок/проблемы', {ok,bad});
+  }
+
+  async function bookTest(){
+    const contact = $('#devContact').value.trim();
+    localStorage.setItem('DEV_CONTACT', contact);
+    // берём выбор из твоего UI/моста
+    const s = (function(){
+      let d = (window.scope && (scope._selDate||scope.selDate)) || '';
+      let t = (window.scope && (scope._selTime||scope.selTime)) || '';
+      let dur = (window.scope && (scope._durMin||scope.durMin)) || 30;
+      const btn = qs('#slots .btn-primary, #slots .active'); if (!t && btn) t = (btn.dataset.time||btn.textContent||'').trim();
+      return { date:d||'', time:t||'', duration_min:dur||30 };
+    })();
+    const payload = { type:'consult_booking', contact, format: (window.scope&&scope._format)||'call' };
+    if (s.date) payload.date = s.date;
+    if (s.time) payload.time = s.time;
+    payload.duration_min = s.duration_min;
+
+    // отдаём через твой apiEvent/bridge, чтобы отловить коллизию слота
+    try{
+      const res = await (window.apiEvent ? window.apiEvent('consult_booking', payload) : Promise.resolve({ok:false, error:'no_apiEvent'}));
+      log('consult_booking →', payload);
+      log('consult_booking ←', res);
+    }catch(e){
+      log('consult_booking error', String(e));
+    }
+  }
+
+  // перехват apiEvent для логов
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      log('→ apiEvent', {type, data});
+      const r = prev ? await prev(type, data) : undefined;
+      log('← apiEvent', r);
+      return r;
+    };
+  })();
+
+  // кнопки
+  $('#devPing').onclick  = ping;
+  $('#devSlots').onclick = async()=>{ const d = await getFreeSlots(); if(d&&d.ok) auditCalendar(); };
+  $('#devAudit').onclick = auditCalendar;
+  $('#devBook').onclick  = bookTest;
+})();
+</script>
+<style>
+#devPanel{position:fixed;right:12px;bottom:12px;z-index:99999;background:#0b1220;color:#e6edf3;border:1px solid #24324a;border-radius:12px;width:320px;font:12px/1.4 system-ui,Segoe UI,Roboto,Arial;padding:0;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+#devPanel .dev-head{padding:8px 10px;background:#111a2b;border-bottom:1px solid #24324a;border-top-left-radius:12px;border-top-right-radius:12px;font-weight:700;letter-spacing:.5px}
+#devPanel .dev-body{padding:8px 10px;max-height:55vh;overflow:auto}
+#devPanel .row{display:flex;gap:6px;align-items:center;margin:6px 0}
+#devPanel label{min-width:110px;color:#8fb0ff}
+#devPanel input{flex:1 1 auto;background:#0f172a;border:1px solid #2f3b59;border-radius:8px;color:#e6edf3;padding:6px 8px}
+#devPanel button{background:#1f6feb;border:0;border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer}
+#devPanel pre{white-space:pre-wrap;background:#0f172a;border:1px dashed #2b3860;border-radius:8px;padding:6px 8px;margin:6px 0 0;max-height:26vh;overflow:auto}
 </style>
 
 
@@ -2584,7 +2979,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycby0aRMT7KnrrQV0_T3fiygS8FnNDhEepTxxdGxVmEO6ccw2hVk2kfemSt8zNhvNSKbS/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbwQXQUixdSe9yr3m2xHNtTNCnzZ3gVvTrjK8ywQhmehLbPTUuATB-XBI9zHgRSp7CS9/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -3515,7 +3910,7 @@ window.__domLog = function(){};
     const tg = (window.Telegram && Telegram.WebApp) || null;
     const tgInit = tg ? (tg.initData || '') : '';
     const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
-    const data = JSON.stringify({ .....extra });
+    const data = JSON.stringify({ ...extra });
     return _jsonp(url, { mode: 'event', type, tg_init: tgInit, data });
   }
   window.apiEvent = apiEvent;
@@ -5189,6 +5584,231 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
+
+<!-- ==== STEP2 NORMAL: tails hidden + monthly cache (race-safe, non-invasive) ==== -->
+<style>
+  /* Хвосты соседних месяцев — полностью скрываем и запрещаем клики */
+  #cal .cal-cell.tail{ visibility:hidden; pointer-events:none; }
+</style>
+<script>
+(function(){
+  if (window.__CAL_STEP2_NORMAL__) return; window.__CAL_STEP2_NORMAL__ = true;
+
+  const qs  = (s,root=document)=>root.querySelector(s);
+  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
+  const dd2 = (n)=>String(n).padStart(2,'0');
+  const TZ  = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
+
+  // ---------- MONTH HELPERS ----------
+  function parseYM_fallback(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim();
+    const m = t.match(/([А-Яа-яA-Za-zЁё]+)\s+(\d{4})/);
+    if (!m) return null;
+    const map = {янв:'01',фев:'02',мар:'03',апр:'04',мая:'05',май:'05',июн:'06',июл:'07',авг:'08',сен:'09',сент:'09',окт:'10',ноя:'11',дек:'12',
+                 jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const stem = m[1].toLowerCase().replace('ё','е').slice(0,3);
+    const mm = map[stem]; if (!mm) return null;
+    return { y: m[2], m: mm };
+  }
+  function parseYM(){
+    try{
+      if (typeof window.parseYM === 'function'){ const r = window.parseYM(); if (r && r.y && r.m) return r; }
+    }catch(_){}
+    try{
+      if (typeof window.parseHeadYM === 'function'){ const r = window.parseHeadYM(); if (r && r.y && r.m) return r; }
+    }catch(_){}
+    return parseYM_fallback();
+  }
+  function daysInMonth(y,m){ return new Date(+y, +m, 0).getDate(); }
+
+  // ---------- TAILS MARKER ----------
+  function markTailsAndAttachISO(ym){
+    const grid = qs('#cal .cal-grid'); if (!grid) return;
+    const cells = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
+    if (!cells.length) return;
+
+    // Найти индекс первой ячейки с "1"
+    let startIdx = -1;
+    for (let i=0;i<cells.length;i++){
+      const raw = (cells[i].dataset.day || cells[i].textContent || '').trim();
+      if (/^\d+$/.test(raw) && parseInt(raw,10) === 1){ startIdx = i; break; }
+    }
+    if (startIdx < 0) startIdx = 0;
+
+    const total = daysInMonth(ym.y, ym.m);
+    const endIdx = startIdx + total - 1;
+
+    cells.forEach((cell, idx)=>{
+      const dayTxt = (cell.dataset.day || cell.textContent || '').trim();
+      const dayNum = /^\d+$/.test(dayTxt) ? parseInt(dayTxt,10) : NaN;
+      const inMonth = (idx >= startIdx && idx <= endIdx && !isNaN(dayNum) && dayNum>=1 && dayNum<=total);
+      if (inMonth){
+        const iso = `${ym.y}-${ym.m}-${dd2(dayNum)}`;
+        cell.dataset.iso = iso;
+        cell.classList.remove('tail');
+        cell.style.visibility = '';
+      } else {
+        cell.classList.add('tail','off');
+        cell.setAttribute('aria-disabled','true');
+        if (cell.dataset.iso) delete cell.dataset.iso;
+      }
+    });
+  }
+
+  // ---------- MONTH CACHE (RAM + sessionStorage) ----------
+  const TTL_MS = 3 * 60 * 1000; // 3 минуты
+  const RAM = new Map();
+  function keyYM(y,m){ return `${y}-${m}`; }
+  function getCache(y,m){
+    const k = keyYM(y,m);
+    let e = RAM.get(k);
+    if (!e){
+      try{ e = JSON.parse(sessionStorage.getItem('free:'+k) || 'null'); }catch(_){ e = null; }
+      if (e) RAM.set(k, e);
+    }
+    if (e && (Date.now() - (e.ts||0)) < TTL_MS) return e;
+    return null;
+  }
+  function setCache(y,m,days,gran,tz){
+    const k = keyYM(y,m);
+    const e = { ts: Date.now(), days: days||{}, gran: gran||30, tz: tz||TZ };
+    RAM.set(k, e);
+    try{ sessionStorage.setItem('free:'+k, JSON.stringify(e)); }catch(_){}
+    return e;
+  }
+  function invalidateMonth(y,m){
+    const k = keyYM(y,m);
+    RAM.delete(k);
+    try{ sessionStorage.removeItem('free:'+k); }catch(_){}
+  }
+
+  // ---------- WRAPS (non-invasive) ----------
+  // 1) Оборачиваем applyDays/applyDaysState, чтобы сначала отмечать хвосты
+  (function(){
+    const wrapApply = (fnName, mapper)=>{
+      const orig = window[fnName];
+      if (typeof orig !== 'function') return;
+      window[fnName] = function(){
+        // попытка достать YM из аргументов или заголовка
+        let ym = null;
+        if (arguments.length && typeof arguments[0]==='object' && arguments[0].y && arguments[0].m){
+          ym = arguments[0];
+        } else if (arguments.length>=2) {
+          ym = { y: arguments[0], m: arguments[1] };
+        } else {
+          ym = parseYM();
+        }
+        if (ym) try{ markTailsAndAttachISO(ym); }catch(_){}
+        return orig.apply(this, arguments);
+      };
+    };
+    wrapApply('applyDays');        // V5
+    wrapApply('applyDaysState');   // ранний блок
+  })();
+
+  // 2) Оборачиваем загрузчики месяца, добавляя кэш и race-guard
+  (function(){
+    // общий реквест-id (если ранее уже добавили — используем его)
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
+
+    // V5: loadFreeSlots(y, m) -> Promise<{days,gran,tz}>
+    if (typeof window.loadFreeSlots === 'function'){
+      const orig = window.loadFreeSlots;
+      window.loadFreeSlots = async function(y, m, opt){
+        opt = opt || {};
+        const cached = getCache(y,m);
+        if (cached && !opt.force){
+          // синхронизируем глобалы для совместимости
+          window.__GRAN__ = cached.gran;
+          window.__FREE__ = cached.days;
+          return { ok:true, days: cached.days, gran: cached.gran, tz: cached.tz, cached:true };
+        }
+        const my = ++window.__CAL_REQ_ID__;
+        const res = await orig.apply(this, arguments);
+        if (my !== window.__CAL_REQ_ID__) return res; // устарел — ничего не делаем
+        try{
+          if (res && res.days){ setCache(y,m, res.days, res.gran, res.tz); }
+          else if (window.__FREE__){ setCache(y,m, window.__FREE__, window.__GRAN__||30, TZ); }
+        }catch(_){}
+        return res;
+      };
+    }
+
+    // Ранний блок: loadFreeSlotsForMonth(y, m) -> async (заполняет window.__FREE__)
+    if (typeof window.loadFreeSlotsForMonth === 'function'){
+      const orig2 = window.loadFreeSlotsForMonth;
+      window.loadFreeSlotsForMonth = async function(y, m, opt){
+        opt = opt || {};
+        const cached = getCache(y,m);
+        if (cached && !opt.force){
+          window.__GRAN__ = cached.gran;
+          window.__FREE__ = cached.days;
+          return; // из кэша уже всё положили
+        }
+        const my = ++window.__CAL_REQ_ID__;
+        await orig2.apply(this, arguments);
+        if (my !== window.__CAL_REQ_ID__) return; // устарел
+        try{
+          if (window.__FREE__){ setCache(y,m, window.__FREE__, window.__GRAN__||30, TZ); }
+        }catch(_){}
+      };
+    }
+  })();
+
+  // 3) После успешной брони инвалидация кэша и мягкое обновление
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if ((type==='consult_booking' || (data && data.type==='consult_booking')) && res && res.ok){
+          const date = (data && data.date) || (window.scope && (scope._selDate||scope.selDate)) || '';
+          if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)){
+            const ym = { y: date.slice(0,4), m: date.slice(5,7) };
+            invalidateMonth(ym.y, ym.m);
+            // локально вычеркнем занятый старт, если он в __FREE__
+            const t = (data && data.time) || (window.scope && (scope._selTime||scope.selTime));
+            const dur = (data && +data.duration_min) || (window.scope && +scope._durMin) || 30;
+            const step = window.__GRAN__ || 30;
+            if (window.__FREE__ && window.__FREE__[date] && t){
+              const arr = window.__FREE__[date];
+              const idx = arr.indexOf(t);
+              if (idx>=0){
+                const removeCount = Math.max(1, Math.ceil(dur / step));
+                // удаляем непрерывную цепочку шагов
+                for (let i=0;i<removeCount;i++){
+                  const hh = (function(m){ const H=String(Math.floor(m/60)).padStart(2,'0'); const M=String(m%60).padStart(2,'0'); return H+':'+M; })(
+                    (function(s){ const m=s.split(':').map(Number); return m[0]*60+m[1]; })(t) + i*step
+                  );
+                  const j = arr.indexOf(hh); if (j>=0) arr.splice(j,1);
+                }
+                if (!arr.length){ const ym2 = parseYM(); if (ym2) markTailsAndAttachISO(ym2); }
+              }
+            }
+            // мягко перезагрузим месяц (если есть функции)
+            if (typeof window.syncMonthAndDays === 'function') { try{ await window.syncMonthAndDays(); }catch(_){} }
+            else if (typeof window.syncMonth === 'function')    { try{ await window.syncMonth(); }catch(_){} }
+          }
+        }
+      }catch(_){}
+      return res;
+    };
+  })();
+
+  // 4) Первичная отметка хвостов после начальной отрисовки сетки
+  setTimeout(()=>{ const ym = parseYM(); if (ym) markTailsAndAttachISO(ym); }, 50);
+
+  // 5) После переключения месяца — тоже отметим хвосты (перехватываем клики на prev/next)
+  document.addEventListener('click', (e)=>{
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')){
+      setTimeout(()=>{ const ym = parseYM(); if (ym) markTailsAndAttachISO(ym); }, 60);
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
 
