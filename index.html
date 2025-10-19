@@ -279,9 +279,50 @@
     }
 
     async function syncMonth(){
-      const my = ++REQ;
-      const first = `${curY}-${curM}-01`;
-      const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
+  const my = ++REQ; // защита от гонок
+
+  const first = `${curY}-${curM}-01`;
+  const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
+
+  const grid = document.getElementById('calGrid');
+  grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
+
+  const data = await apiGet('/api/slots/free', {
+    from: first,
+    to: last,
+    tz,
+    lead_min: 60,
+    duration_min: selDur   // <-- важно для 60/90
+  });
+
+  if (my !== REQ) return; // пришёл устаревший ответ
+
+  if (data && data.ok){
+    FREE = data.days || {};
+    GRAN = data.gran || 30;
+
+    drawCalendar(curY, curM);
+    applyDaysState(curY, curM);
+
+    // если текущая дата без слотов — выберем первую со слотами
+    if (!selDate || !FREE[selDate] || !FREE[selDate].length){
+      autoSelectFirstDayWithSlots();
+    } else {
+      renderSlots(selDate);
+    }
+  } else {
+    document.getElementById('status').textContent = 'Ошибка загрузки слотов';
+  }
+}
+qsa('.dur').forEach(b => {
+  b.onclick = async () => {
+    qsa('.dur').forEach(x => x.classList.remove('btn-primary'));
+    b.classList.add('btn-primary');
+    selDur = +b.dataset.dur || 30;
+    await syncMonth();          // перетягиваем слоты с учётом 30/60/90
+  };
+});
+
 
       const grid = document.getElementById('calGrid');
       grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
