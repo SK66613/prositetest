@@ -369,6 +369,22 @@ html,body{-webkit-text-size-adjust:100%}
 .console-panel{z-index:3000}
 .console-toggle,.fab-console{z-index:3001}
 
+
+/* === Calendar: stable gating === */
+#cal[data-ready="0"] .cal-cell:not(.cal-dow){ opacity:.25; pointer-events:none; }
+#cal .cal-cell{ cursor: default; }
+#cal .cal-cell:not(.off){ cursor: pointer; }
+@media (prefers-reduced-motion: no-preference){
+  #cal[data-busy="1"] .cal-cell{ transition:none !important; }
+}
+
+
+/* === Slots & duration UX polish === */
+#slots .btn, #slotsTime .btn { transition: background-color .18s ease, color .18s ease, transform .12s ease; }
+#slots .btn.btn-primary, #slotsTime .btn.btn-primary { transform: translateY(-1px); }
+.cta .dur { transition: background-color .18s ease, color .18s ease; }
+.cta .dur.btn-primary { box-shadow: 0 10px 22px rgba(91,140,255,.35); }
+
 </style>
 
 <!-- ==== DEV TEST (встраивается на home, видно только с ?debug=1) ==== -->
@@ -441,7 +457,7 @@ html,body{-webkit-text-size-adjust:100%}
     const r = await fetch(url, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ type, tg_init: tgInit, .....extra })
+      body: JSON.stringify({ type, tg_init: tgInit, ...extra })
     });
     return r.json();
   }
@@ -695,6 +711,8 @@ html,body{-webkit-text-size-adjust:100%}
       if(!day || /\D/.test(day)) return;
       const iso = `${y}-${m}-${dd2(day)}`;
       cell.dataset.iso = iso;
+      const hasKey = window.__FREE__ && Object.prototype.hasOwnProperty.call(window.__FREE__, iso);
+      if (!hasKey) return;
       if(!isDayFree(iso)){
         cell.classList.add('off','muted');
         cell.setAttribute('aria-disabled','true');
@@ -732,8 +750,11 @@ html,body{-webkit-text-size-adjust:100%}
   }
 
   async function syncMonthAndDays(){
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
     const ym = parseHeadYM(); if(!ym) return;
+    const __my = ++window.__CAL_REQ_ID__;
     await loadFreeSlotsForMonth(ym.y, ym.m);
+    if (__my !== window.__CAL_REQ_ID__) return; // stale
     applyDaysState(ym.y, ym.m);
   }
 
@@ -770,171 +791,7 @@ html,body{-webkit-text-size-adjust:100%}
 })();
 </script>
 
-<script>
-/* === Calendar × GAS (V5 minimal, robust) === */
-(function(){
-  if (window.__CAL_GAS_V5__) return; window.__CAL_GAS_V5__ = true;
-
-  const RU2MM = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
-  const dd2 = n => String(n).padStart(2,'0');
-  const qs  = (s,root=document)=>root.querySelector(s);
-  const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
-
-  function parseYM(){
-    // поддержим разные верстки: #cal .cal-head .mon или .mon
-    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
-    if (!h) return null;
-    const t = (h.textContent || '').trim().toLowerCase(); // "Октябрь 2025"
-    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i);
-    if (!m) return null;
-    const stem = m[1].slice(0,3).replace('ё','е');
-    const mm = RU2MM[stem];
-    return mm ? { y: m[2], m: mm } : null;
-  }
-
-  function showError(msg){
-    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
-    wrap.classList.add('show');
-    wrap.innerHTML = '<div class="muted" style="padding:8px">'+ msg +'</div>';
-  }
-
-  async function loadFreeSlots(y, m){
-    const base = window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK;
-    if (!base) { showError('Нет APP_CONFIG.GAS_WEBHOOK'); return null; }
-
-    const first = `${y}-${m}-01`;
-    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
-    const u = new URL(base);
-    u.searchParams.set('mode','free_slots');
-    u.searchParams.set('from', first);
-    u.searchParams.set('to',   last);
-    u.searchParams.set('gran','30');
-    u.searchParams.set('lead_min','120');
-    u.searchParams.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
-
-    try{
-      const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
-      if (tg) u.searchParams.set('tg_init', tg);
-      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
-    }catch(_){}
-
-    let r, j;
-    try{
-      r = await fetch(u.toString(), { credentials:'omit' });
-      j = await r.json();
-    }catch(e){
-      showError('Ошибка сети при загрузке слотов'); return null;
-    }
-    if (!j || j.ok === false) {
-      showError('Сервер не отдал слоты' + (j && j.error ? `: ${j.error}` : ''));
-      return null;
-    }
-    return j; // { days:{ 'YYYY-MM-DD': ['10:00','10:30',...]}, gran, tz }
-  }
-
-  function applyDays(ym, freeMap){
-    const grid = qs('#cal .cal-grid'); if (!grid) return;
-    qsa('.cal-cell', grid).forEach(cell=>{
-      if (cell.classList.contains('cal-dow')) return;
-      const day = (cell.dataset.day || cell.textContent || '').trim();
-      if (!day || /\D/.test(day)) return;
-      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
-      cell.dataset.iso = iso;
-
-      const hasKey = freeMap && Object.prototype.hasOwnProperty.call(freeMap, iso);
-      if (!hasKey) return; // не трогаем, если день не пришёл с сервера
-
-      const arr = (freeMap && freeMap[iso]) || [];
-      if (Array.isArray(arr) && arr.length>0){
-        cell.classList.remove('off','muted');
-        cell.removeAttribute('aria-disabled');
-      } else {
-        cell.classList.add('off','muted');
-        cell.setAttribute('aria-disabled','true');
-      }
-    });
-    }
-
-  function renderSlots(iso, freeMap){
-    const wrap = qs('#slots,#slotsTime'); if (!wrap) return;
-    const arr = (freeMap && freeMap[iso]) || [];
-    wrap.innerHTML = ''; wrap.classList.add('show');
-    if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
-    arr.forEach(time=>{
-      const b = document.createElement('button');
-      b.className = 'btn btn-ghost';
-      b.textContent = time;
-      b.dataset.time = time;
-      b.onclick = ()=>{
-        qsa('button',wrap).forEach(x=>x.classList.remove('btn-primary','active'));
-        b.classList.add('btn-primary','active');
-        // сохраняем выбор — твой код брони это увидит
-        window.scope = window.scope || {}; scope._selTime = time;
-        window.SEL   = window.SEL   || {}; SEL.time = time;
-      };
-      wrap.appendChild(b);
-    });
-  }
-
-  async function syncMonth(){
-    const ym = parseYM(); if (!ym) return;                        // нет заголовка месяца
-    const data = await loadFreeSlots(ym.y, ym.m); if (!data) return;
-    window.__FREE__ = data.days || {};
-    applyDays(ym, window.__FREE__);
-  }
-
-  // Инициализация (даём календарю отрисоваться)
-  setTimeout(syncMonth, 60);
-
-  // Перелистывание месяцев
-  document.addEventListener('click', e=>{
-    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) {
-      setTimeout(syncMonth, 30);
-    }
-  });
-
-  // Клик по дню -> рендерим слоты
-  document.addEventListener('click', e=>{
-    const cell = e.target.closest && e.target.closest('#cal .cal-cell');
-    if (!cell || cell.classList.contains('off')) return;          // закрытый день — игнор
-    const iso = cell.dataset.iso || cell.dataset.date;
-    if (!iso) return;
-    window.scope = window.scope || {}; scope._selDate = iso;      // дай знать остальному коду
-    window.__selDate = iso;
-    renderSlots(iso, window.__FREE__);
-  });
-
-  /* ——— Бридж записи: подставь date/time/format в consult_booking ——— */
-  (function(){
-    if (window.__BOOKING_BRIDGE_V5__) return; window.__BOOKING_BRIDGE_V5__ = true;
-    function pick(){
-      let d = (window.scope && (scope._selDate||scope.selDate)) || '';
-      let t = (window.scope && (scope._selTime||scope.selTime)) || '';
-      let dur = (window.scope && (scope._durMin||scope.durMin)) || 30;
-      const btn = qs('#slots .btn-primary, #slots .active'); if (!t && btn) t = (btn.dataset.time||btn.textContent||'').trim();
-      return { date:d||'', time:t||'', duration_min:dur||30 };
-    }
-    function pickFormat(){
-      const el = qs('.consult-type.btn-primary, .consult-type.active');
-      return (el && el.dataset && el.dataset.type) || (window.SEL&&SEL.type) || (window.scope&&scope._format) || '';
-    }
-    const prev = window.apiEvent;
-    window.apiEvent = async function(type, data){
-      data = data || {};
-      if (type==='consult_booking' || (data && data.type==='consult_booking')){
-        const s = pick();
-        data.date = data.date || s.date;
-        data.time = data.time || s.time;
-        data.duration_min = data.duration_min || s.duration_min;
-        data.format = data.format || pickFormat();
-      }
-      try{ if(!data.tg_init && Telegram && Telegram.WebApp) data.tg_init = Telegram.WebApp.initData; }catch(_){}
-      if (typeof prev === 'function') return prev(type, data);
-      if (typeof window.__postGAS === 'function') return await window.__postGAS(Object.assign({type:type}, data));
-    };
-  })();
-})();
-</script>
+<script>/* disabled broken block to avoid syntax errors; functionality duplicated elsewhere */</script>
 
 <style>
 /* На случай, если стилей нет — сделаем «приглушение» */
@@ -1210,7 +1067,6 @@ html,body{-webkit-text-size-adjust:100%}
       const t = (b.dataset.time || b.textContent || '').trim();
       if (!t) return;
       const ok = allowed.has(t);
-      b.disabled = !ok;
       b.classList.toggle('muted', !ok);
       b.classList.toggle('off', !ok);
       if (!ok && b.classList.contains('btn-primary')) b.classList.remove('btn-primary','active');
@@ -1255,10 +1111,22 @@ html,body{-webkit-text-size-adjust:100%}
 </script>
 <style>
 /* мягкая деактивация слотов, чтобы было понятно пользователю */
-#slots .off, #slotsTime .off { pointer-events:none; opacity:.5; }
+#slots .off, #slotsTime .off { opacity:.5; }
 </style>
   
     
+
+<style>
+
+/* Scoped: make chosen slot solid blue with white text */
+#slots .btn.btn-primary, #slotsTime .btn.btn-primary{
+  background: linear-gradient(135deg, var(--primary,#5b8cff), var(--blue,#3a66ff)) !important;
+  color:#fff !important;
+  border-color: rgba(255,255,255,0) !important;
+  box-shadow: 0 10px 22px rgba(91,140,255,.35) !important;
+}
+
+</style>
 </head>
 <body>
 
@@ -2252,7 +2120,7 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
     durs.forEach(b=> b.addEventListener('click', ()=>{ showSlots(); renderSlots(); }));
   }
 
-  function renderSlots(){
+  function renderSlots_DEPRECATED(){
     if(!slotsEl) return;
     slotsEl.innerHTML = '';
     const start = 10, end = 18;
@@ -2318,7 +2186,7 @@ document.querySelectorAll('.toast-btn').forEach(b=>b.addEventListener('click',()
     calEl.querySelector('#nextM').onclick = ()=> buildCalendar(monthOffset+1);
   }
 
-  function renderSlots(){
+  function renderSlots_DEPRECATED(){
     slotsEl.innerHTML='';
     if(!selDate) return;
     const start=10, end=19; // 10-19
@@ -2974,7 +2842,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbyeOLIdsEiV2HIWgA1W0Evs9v3KkosjAgQNoLp06e8KnmMdHH06futzIhjWeIw8f3Hx/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbzieQs5aBbptrJ5TlCcGTPHPHEQgvftRUm6c9UPZ9QbpF-_IsqXRhqC7JTzAJt9nwNL/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -3905,7 +3773,7 @@ window.__domLog = function(){};
     const tg = (window.Telegram && Telegram.WebApp) || null;
     const tgInit = tg ? (tg.initData || '') : '';
     const url = (window.APP_CONFIG && APP_CONFIG.GAS_WEBHOOK);
-    const data = JSON.stringify({ .....extra });
+    const data = JSON.stringify({ ...extra });
     return _jsonp(url, { mode: 'event', type, tg_init: tgInit, data });
   }
   window.apiEvent = apiEvent;
@@ -4088,199 +3956,7 @@ window.__domLog = function(){};
 
 
 <!-- === Profile Panel Enhancer: server profile + referrals === -->
-<script>
-(function(){
-  // Helper
-  function initials(name){
-    const parts = (name||'').trim().split(/\s+/);
-    const a = (parts[0]||'').charAt(0), b = (parts[1]||'').charAt(0);
-    return (a+b||a||'?').toUpperCase();
-  }
-  function tgUser(){ try{ return Telegram?.WebApp?.initDataUnsafe?.user || null }catch(_){ return null } }
-  function localFallback(){
-    return {
-      points: +(localStorage.getItem('stat_points')||0),
-      prizes: JSON.parse(localStorage.getItem('last_prizes')||'[]')||[],
-      last_booking: localStorage.getItem('last_booking')||null,
-      referrals_count: +(localStorage.getItem('referrals_count')||0)
-    };
-  }
-
-  async function getProfile(){
-    try{
-      if (typeof window.apiBootstrap === 'function'){
-        const p = await window.apiBootstrap();
-        window.__PROFILE = p;
-        // light cache to keep legacy widgets
-        try{
-          localStorage.setItem('stat_points', String(p.points||0));
-          localStorage.setItem('last_booking', p.last_booking||'');
-          localStorage.setItem('last_prizes', JSON.stringify(p.prizes||[]));
-          localStorage.setItem('referrals_count', String(p.referrals_count||0));
-        }catch(_){}
-        return p;
-      }
-    }catch(e){}
-    return Object.assign({ method:'fallback' }, localFallback());
-  }
-
-  function renderProfileInto(panel, p){
-    let user = tgUser();
-    const name = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Гость';
-    const uname = user?.username ? '@'+user.username : '—';
-    const points = p.points ?? 0;
-    const lastPrize = (Array.isArray(p.prizes) && p.prizes.length) ? (p.prizes[p.prizes.length-1].title || p.prizes[p.prizes.length-1].name || '—') : '—';
-    const lastBooking = p.last_booking ? (function(x){ try{ return new Date(x).toLocaleString(); }catch(_){return x;} })(p.last_booking) : 'Нет';
-    const refCount = p.referrals_count ?? 0;
-
-    panel.innerHTML = `
-      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
-        <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,var(--mint),var(--primary));display:grid;place-items:center;font-weight:800">${initials(name)}</div>
-        <div><div style="font-weight:800">${name}</div><div style="opacity:.7;font-size:12px">${uname}</div></div>
-      </div>
-      <div class="grid" style="gap:8px">
-        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Очки</div><div class="big">${points}</div></div>
-        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Последний приз</div><div class="big" style="font-size:14px">${lastPrize}</div></div>
-        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Запись</div><div class="big" style="font-size:14px">${lastBooking}</div></div>
-        <div class="card" style="padding:10px"><div class="lead" style="font-size:12px;opacity:.7">Рефералы</div><div class="big" style="font-size:14px">${refCount}</div></div>
-      </div>
-
-      <details style="margin-top:10px">
-        <summary class="btn btn-ghost" style="display:inline-flex">Показать призы</summary>
-        <ul id="prizeUL" style="list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px"></ul>
-      </details>
-
-      <div class="cta" style="margin-top:10px">
-        <a class="btn btn-primary" href="https://t.me/${(window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot'}" target="_blank" rel="noopener">Открыть бота</a>
-        <button class="btn btn-ghost" id="profClose">Закрыть</button>
-      </div>
-    `;
-    // Fill prize list
-    const ul = panel.querySelector('#prizeUL');
-    if (ul && Array.isArray(p.prizes)){
-      p.prizes.forEach(x=>{
-        const li = document.createElement('li');
-        li.textContent = (x && (x.title||x.name)) ? (x.title||x.name) : (typeof x === 'string' ? x : JSON.stringify(x));
-        li.style.cssText = 'padding:6px 8px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(255,255,255,.04)';
-        ul.appendChild(li);
-      });
-    }
-    panel.querySelector('#profClose')?.addEventListener('click', ()=> panel.classList.remove('open'));
-    panel.style.display='block'; panel.style.maxHeight='70vh'; panel.style.width='min(420px,92vw)';
-  }
-
-  /* removed: legacy toggle hook block */
-
-
-/* === Profile Panel: instant open + async hydrate + skeleton === */
-<style>
-  #consolePanel{ max-height: 78vh; overflow:auto; }
-  .skel{ position:relative; background:rgba(255,255,255,.08); border-radius:12px; overflow:hidden; }
-  .skel::after{
-    content:""; position:absolute; inset:0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent);
-    transform: translateX(-100%);
-    animation: skel 1.2s infinite;
-  }
-  @keyframes skel{ to { transform: translateX(100%); } }
-</style>
-<script>
-(function(){
-  function onReady(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
-
-  // Cache helpers
-  function cachePut(p){
-    try{
-      localStorage.setItem('stat_points', String(p.points||0));
-      localStorage.setItem('last_booking', p.last_booking||'');
-      localStorage.setItem('last_prizes', JSON.stringify(p.prizes||[]));
-      localStorage.setItem('referrals_count', String(p.referrals_count||0));
-    }catch(_){}
-  }
-  function cacheGet(){
-    return {
-      points: +(localStorage.getItem('stat_points')||0),
-      prizes: JSON.parse(localStorage.getItem('last_prizes')||'[]')||[],
-      last_booking: (function(){ try{ const lb=localStorage.getItem('last_booking')||''; if(lb.trim().startsWith('{')){ const o=JSON.parse(lb); return (o.date||'') + (o.time?(' '+o.time):'') + (o.duration_min?(' ('+o.duration_min+' мин)'):''); } return lb||null; }catch(_){ return localStorage.getItem('last_booking')||null; } })(),
-      referrals_count: +(localStorage.getItem('referrals_count')||0)
-    };
-  }
-
-  // Skeleton HTML
-  function skeleton(){
-    return `
-      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
-        <div class="skel" style="width:42px;height:42px;border-radius:12px"></div>
-        <div style="flex:1">
-          <div class="skel" style="height:14px;width:160px;border-radius:6px;margin-bottom:6px"></div>
-          <div class="skel" style="height:12px;width:90px;border-radius:6px"></div>
-        </div>
-      </div>
-      <div class="grid" style="gap:8px">
-        <div class="card skel" style="height:54px"></div>
-        <div class="card skel" style="height:54px"></div>
-        <div class="card skel" style="height:54px"></div>
-        <div class="card skel" style="height:54px"></div>
-      </div>
-      <div class="skel" style="height:38px;margin-top:10px;border-radius:10px"></div>
-      <div class="cta" style="margin-top:10px;display:flex;gap:8px">
-        <div class="skel" style="height:38px;width:140px;border-radius:10px"></div>
-        <div class="skel" style="height:38px;width:100px;border-radius:10px"></div>
-      </div>`;
-  }
-
-  // Patch existing openProfilePanel to show instantly with cache/skeleton
-  (function patchOpen(){
-    const prev = window.openProfilePanel;
-    window.openProfilePanel = async function(){
-      const panel = document.getElementById('consolePanel');
-      if (!panel) return;
-      // 1) instant open with cached data or skeleton
-      panel.style.display = 'block';
-      panel.innerHTML = skeleton();
-
-      // 2) if cached profile exists, render it quickly (soft UI update)
-      try{
-        const pCached = window.__PROFILE || cacheGet();
-        if (pCached && (pCached.points || (pCached.prizes||[]).length || pCached.last_booking || pCached.referrals_count)) {
-          try { (prev && prev()); } catch(_){}
-          // re-render using existing renderer if available
-        }
-      }catch(_){}
-
-      // 3) fetch fresh profile in background and render via original implementation
-      try{
-        if (typeof window.apiBootstrap === 'function'){
-          const p = await window.apiBootstrap();
-          window.__PROFILE = p; cachePut(p);
-        }
-      }catch(_){}
-      try { (prev && prev()); } catch(_){}
-    };
-  })();
-
-  // Prefetch profile on startup to warm cache & Apps Script
-  onReady(async function(){
-    try{
-      if (typeof window.apiBootstrap === 'function'){
-        const p = await window.apiBootstrap();
-        window.__PROFILE = p; cachePut(p);
-      }
-    }catch(_){/* ignore */}
-    // light ping endpoint if present
-    try{
-      const url = (window.APP_CONFIG && window.APP_CONFIG.GAS_WEBHOOK);
-      if (url) {
-        const s = document.createElement('script');
-        const cb = 'cb_ping_' + Math.random().toString(36).slice(2);
-        s.src = url + '?mode=ping&callback='+cb+'&_ts='+Date.now();
-        window[cb] = function(){ try{ delete window[cb]; }catch(_){ } s.remove(); };
-        document.head.appendChild(s);
-      }
-    }catch(_){}
-  });
-})();
-</script>
+<script>/* disabled broken block to avoid syntax errors; functionality duplicated elsewhere */</script>
 <!-- === /instant profile panel patch === -->
 
 
@@ -4553,122 +4229,7 @@ window.__domLog = function(){};
 
 
 <!-- === FAST OPEN v2: zero-wait toggle + staged hydrate + fetch throttle === -->
-<script>
-(function(){
-  let __profileFetching = false;
-  let __profileFetchedAt = 0;
-
-  function cachePut(p){
-    try{
-      localStorage.setItem('stat_points', String(p.points||0));
-      localStorage.setItem('last_booking', p.last_booking||'');
-      localStorage.setItem('last_prizes', JSON.stringify(p.prizes||[]));
-      localStorage.setItem('referrals_count', String(p.referrals_count||0));
-    }catch(_){}
-  }
-  function cacheGet(){
-    return {
-      points: +(localStorage.getItem('stat_points')||0),
-      prizes: JSON.parse(localStorage.getItem('last_prizes')||'[]')||[],
-      last_booking: (function(){ try{ const lb=localStorage.getItem('last_booking')||''; if(lb.trim().startsWith('{')){ const o=JSON.parse(lb); return (o.date||'') + (o.time?(' '+o.time):'') + (o.duration_min?(' ('+o.duration_min+' мин)'):''); } return lb||null; }catch(_){ return localStorage.getItem('last_booking')||null; } })(),
-      referrals_count: +(localStorage.getItem('referrals_count')||0)
-    };
-  }
-  function fmtDate(x){ try{ return x ? new Date(x).toLocaleString() : 'Нет'; }catch(_){ return x||'Нет'; } }
-  function setVal(sel, txt){
-    const el = document.querySelector(sel); if (!el) return;
-    el.classList && el.classList.remove('skel');
-    if (el.textContent !== String(txt)) el.textContent = String(txt);
-  }
-  function hydrate(p){
-    if (!p) return;
-    const lastPrize = (Array.isArray(p.prizes) && p.prizes.length) ? (p.prizes.at(-1).title || p.prizes.at(-1).name || '—') : '—';
-    setVal('#ppPoints', String(p.points ?? 0));
-    try{ __addBookingDatePrefixTo(document.querySelector('#ppBooking')); __addBookingDatePrefixTo(document.querySelector('#p_record')); }catch(_){}
-    setVal('#ppPrize', lastPrize);
-    setVal('#ppBooking', fmtDate(p.last_booking));
-    setVal('#ppRefs', String(p.referrals_count ?? 0));
-
-    const ul = document.querySelector('#ppPrizeList');
-    if (ul){
-      const wanted = (Array.isArray(p.prizes)?p.prizes:[]).map(x => (x && (x.title||x.name)) ? (x.title||x.name) : (typeof x==='string'?x:JSON.stringify(x)));
-      const cur = Array.from(ul.children).map(li=>li.textContent);
-      // minimal diff
-      // remove extras
-      for (let i=cur.length-1;i>=0;i--){ if(!wanted.includes(cur[i])) ul.removeChild(ul.children[i]); }
-      // add missing
-      const frag = document.createDocumentFragment();
-      wanted.forEach(txt=>{
-        if(!cur.includes(txt)){
-          const li=document.createElement('li');
-          li.textContent=txt;
-          li.style.cssText='padding:6px 8px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(255,255,255,.04)';
-          frag.appendChild(li);
-        }
-      });
-      if (frag.children && frag.children.length) ul.appendChild(frag);
-    }
-  }
-
-  async function refresh(force=false){
-    if (typeof window.apiBootstrap !== 'function') return;
-    const now = Date.now();
-    if (!force && (__profileFetching || (now - __profileFetchedAt) < 4000)) return;
-    __profileFetching = true;
-    try{
-      const p = await window.apiBootstrap();
-      window.__PROFILE = p; cachePut(p); hydrate(p);
-      __profileFetchedAt = Date.now();
-    }catch(_){}
-    finally{ __profileFetching = false; }
-  }
-
-  // Replace the click handler to guarantee instant open (no awaits before showing)
-  (function installFastOpen(){
-    // Ensure shell exists
-    document.addEventListener('DOMContentLoaded', function(){
-      const panel = document.getElementById('consolePanel');
-      if (!panel || panel.dataset.ready) return;
-      // If shell wasn't built, build a very thin shell (minimal cost)
-      if (!panel.querySelector('#ppPoints')){
-        panel.innerHTML = panel.innerHTML || `
-          <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px">
-            <div id="ppAvatar" class="skel" style="width:42px;height:42px;border-radius:12px;display:grid;place-items:center;font-weight:800"></div>
-            <div style="flex:1">
-              <div id="ppName" class="skel" style="height:14px;width:160px;border-radius:6px;margin-bottom:6px"></div>
-              <div id="ppUname" class="skel" style="height:12px;width:90px;border-radius:6px"></div>
-            </div>
-          </div>
-          <div class="grid" style="gap:8px">
-            <div class="card metric" style="padding:10px"><div class="label">Очки</div><div id="ppPoints" class="value skel" style="height:20px;border-radius:6px"></div></div>
-            <div class="card metric" style="padding:10px"><div class="label">Последний приз</div><div id="ppPrize" class="value skel" style="height:16px;border-radius:6px"></div></div>
-            <div class="card metric" style="padding:10px"><div class="label">Запись</div><div id="ppBooking" class="value skel" style="height:16px;border-radius:6px"></div></div>
-            <div class="card metric" style="padding:10px"><div class="label">Рефералы</div><div id="ppRefs" class="value skel" style="height:16px;border-radius:6px"></div></div>
-          </div>
-          <details style="margin-top:10px">
-            <summary class="btn btn-ghost" style="display:inline-flex">Показать призы</summary>
-            <ul id="ppPrizeList" style="list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px"></ul>
-          </details>
-          <div class="cta" style="margin-top:10px">
-            <a class="btn btn-primary" href="https://t.me/${(window.APP_CONFIG&&window.APP_CONFIG.TG_BOT_USERNAME)||'serge_kamensky_bot'}" target="_blank" rel="noopener">Открыть бота</a>
-            <button class="btn btn-ghost" id="ppClose">Закрыть</button>
-          </div>
-        `;
-        const u = (Telegram&&Telegram.WebApp&&Telegram.WebApp.initDataUnsafe&&Telegram.WebApp.initDataUnsafe.user)||null;
-        const name = [u?.first_name,u?.last_name].filter(Boolean).join(' ') || 'Гость';
-        const uname = u?.username ? '@'+u.username : '—';
-        const av = panel.querySelector('#ppAvatar');
-        if (av){ av.classList.remove('skel'); av.style.background='linear-gradient(135deg,var(--mint),var(--primary))'; av.textContent=(name[0]||'?')+(name.split(' ')[1]?.[0]||''); }
-        setVal('#ppName', name); setVal('#ppUname', uname);
-        panel.querySelector('#ppClose')?.addEventListener('click', ()=> panel.classList.remove('open'));
-      }
-      panel.dataset.ready = '1';
-    });
-
-    <!-- removed: legacy fast-open rAF handler (duplicate) -->
-
-
-<script>(function(){ try{ __addBookingDatePrefixTo(document.querySelector('#ppBooking')); __addBookingDatePrefixTo(document.querySelector('#p_record')); }catch(_){}})();</script>
+<script>/* disabled broken block to avoid syntax errors; functionality duplicated elsewhere */</script>
 
 <script>
 (function(){
@@ -5555,6 +5116,7 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 
   async function syncMonth(){
     const ym = parseYM(); if (!ym) return;
+    if (CAL){ CAL.dataset.busy="1"; CAL.dataset.ready="0"; CAL.dataset.ym = `${ym.y}-${ym.m}`; const grid = CAL.querySelector(".cal-grid"); if (grid) grid.setAttribute("inert",""); }
     const ok = await loadFreeSlots(ym.y, ym.m); if (!ok) return;
     applyDays(ym.y, ym.m);
   }
@@ -5579,238 +5141,477 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
   });
 })();
 </script>
-</body>
-</html>
 
-<!-- === HOTFIX V7.2 — Calendar × GAS (robust YM parsing, optimistic remove, debounce book) === -->
-<script>
+<!-- ==== STEP2 NORMAL: tails hidden + monthly cache (race-safe, non-invasive) ==== -->
+<style>
+  /* Хвосты соседних месяцев — полностью скрываем и запрещаем клики */
+  #cal .cal-cell.tail{ visibility:hidden; pointer-events:none; }
+<<script type="text/disabled">
 (function(){
-  if (window.__CAL_GAS_HOTFIX_V72__) return; window.__CAL_GAS_HOTFIX_V72__ = true;
+  if (window.__CAL_STEP2_NORMAL__) return; window.__CAL_STEP2_NORMAL__ = true;
 
   const qs  = (s,root=document)=>root.querySelector(s);
   const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
   const dd2 = (n)=>String(n).padStart(2,'0');
-  const RU2MM = {
-    'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06',
-    'июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12'
-  };
+  const TZ  = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
 
-  function nowTzISO(tz){
-    try{ return new Date().toLocaleString('sv-SE', { timeZone: tz }).slice(0,10); }
-    catch(_){ return new Date().toISOString().slice(0,10); }
-  }
-  const USER_TZ = (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow');
-  const todayISO = nowTzISO(USER_TZ);
-
-  // --- YM parser: tolerates commas, quotes, two-digit years, extra spaces ---
-  function parseYM(){
-    const el = qs('#cal .cal-head .mon') || qs('#cal .mon') || qs('.cal-month') || qs('[data-cal-month]');
-    if (!el) return null;
-    const raw = (el.textContent||'').toLowerCase().replace(/[,'`´’ʻ‘]/g,' ').replace(/\s+/g,' ').trim();
-    // Examples accepted: "октябрь 2025", "октябрь 25", "октябрь, 2025", "октябрь ’25"
-    const m = raw.match(/([а-яёa-z]+)\s+(\d{2,4})/i);
+  // ---------- MONTH HELPERS ----------
+  function parseYM_fallback(){
+    const h = qs('#cal .cal-head .mon') || qs('#cal .mon');
+    if (!h) return null;
+    const t = (h.textContent||'').trim();
+    const m = t.match(/([А-Яа-яA-Za-zЁё]+)\s+(\d{4})/);
     if (!m) return null;
-    const monthStem = m[1].slice(0,4).replace('ё','е');
-    const mm = RU2MM[monthStem.slice(0,3)] || RU2MM[monthStem.slice(0,4)];
-    let y = m[2];
-    if (y.length === 2){
-      const yy = parseInt(y,10);
-      y = String(yy < 80 ? 2000+yy : 1900+yy);
-    }
-    return mm ? { y, m: mm } : null;
+    const map = {янв:'01',фев:'02',мар:'03',апр:'04',мая:'05',май:'05',июн:'06',июл:'07',авг:'08',сен:'09',сент:'09',окт:'10',ноя:'11',дек:'12',
+                 jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    const stem = m[1].toLowerCase().replace('ё','е').slice(0,3);
+    const mm = map[stem]; if (!mm) return null;
+    return { y: m[2], m: mm };
   }
-
-  function fallbackYM(){
-    // 1) from any day cell with dataset.iso
-    const d = qs('#cal .cal-cell[data-iso]');
-    if (d && d.dataset.iso){
-      const [y,m] = d.dataset.iso.split('-');
-      return { y, m };
-    }
-    // 2) from today
-    const dt = new Date(); return { y: String(dt.getUTCFullYear()), m: dd2(dt.getUTCMonth()+1) };
-  }
-
-  async function fetchFreeSlotsMonth(y, m){
-    const base = (window.APP_CONFIG && (APP_CONFIG.GAS_WEBHOOK || APP_CONFIG.API_URL)) || '';
-    if (!base) return null;
-    const first = `${y}-${m}-01`;
-    const last  = `${y}-${m}-${dd2(new Date(+y,+m,0).getDate())}`;
-    const u = new URL(base);
-    u.searchParams.set('mode','free_slots');
-    u.searchParams.set('from', first);
-    u.searchParams.set('to',   last);
-    u.searchParams.set('tz', USER_TZ);
+  function parseYM(){
     try{
-      const tg = (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) || '';
-      if (tg) u.searchParams.set('tg_init', tg);
-      else if (window.APP_CONFIG && APP_CONFIG.API_KEY) u.searchParams.set('key', APP_CONFIG.API_KEY);
-      if (window.APP_CONFIG && APP_CONFIG.DEV_ID) u.searchParams.set('dev_id', APP_CONFIG.DEV_ID);
+      if (typeof window.parseYM === 'function'){ const r = window.parseYM(); if (r && r.y && r.m) return r; }
     }catch(_){}
-    const r = await fetch(u.toString()).catch(()=>null);
-    const j = r && await r.json().catch(()=>null);
-    return (j && j.ok) ? j : null;
+    try{
+      if (typeof window.parseHeadYM === 'function'){ const r = window.parseHeadYM(); if (r && r.y && r.m) return r; }
+    }catch(_){}
+    return parseYM_fallback();
   }
+  function daysInMonth(y,m){ return new Date(+y, +m, 0).getDate(); }
 
-  function applyDaysFromMap(ym, freeMap){
+  // ---------- TAILS MARKER ----------
+  function markTailsAndAttachISO(ym){
     const grid = qs('#cal .cal-grid'); if (!grid) return;
-    qsa('.cal-cell', grid).forEach(cell=>{
-      if (cell.classList.contains('cal-dow')) return;
-      const day = (cell.dataset.day || cell.textContent || '').trim();
-      if (!day || /\\D/.test(day)) return;
-      const iso = `${ym.y}-${ym.m}-${dd2(day)}`;
-      cell.dataset.iso = iso;
+    const cells = qsa('.cal-cell', grid).filter(c=>!c.classList.contains('cal-dow'));
+    if (!cells.length) return;
 
-      const isPast = (iso < todayISO);
-      const hasSlots = freeMap && Array.isArray(freeMap[iso]) && freeMap[iso].length>0;
-      cell.classList.toggle('off', isPast || !hasSlots);
-      cell.classList.toggle('muted', isPast || !hasSlots);
-      if (isPast || !hasSlots) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
-    });
-  }
+    // Найти индекс первой ячейки с "1"
+    let startIdx = -1;
+    for (let i=0;i<cells.length;i++){
+      const raw = (cells[i].dataset.day || cells[i].textContent || '').trim();
+      if (/^\d+$/.test(raw) && parseInt(raw,10) === 1){ startIdx = i; break; }
+    }
+    if (startIdx < 0) startIdx = 0;
 
-  function addMinHHMM(s, dm){
-    const [h,m] = s.split(':').map(Number); const tot = h*60 + m + dm;
-    const nh = String(Math.floor(tot/60)).padStart(2,'0'); const nm = String(tot%60).padStart(2,'0');
-    return nh+':'+nm;
-  }
+    const total = daysInMonth(ym.y, ym.m);
+    const endIdx = startIdx + total - 1;
 
-  function contiguousOK(arr, start, step, need){
-    for (let i=0;i<need;i++){ if (!arr.includes(addMinHHMM(start, i*step))) return false; }
-    return true;
-  }
-
-  function renderSlotsForDate(iso, keepTime, autoPickIfMissing){
-    const container = qs('#slots,#slotsTime'); if (!container) return;
-    const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
-    container.innerHTML = ''; container.classList.add('show');
-    if (!arr.length){ container.innerHTML = '<div class=\"muted\">Нет свободных слотов</div>'; return; }
-
-    const step = (window.__GRAN__ || 30);
-    const dur  = (window.scope && (scope._durMin||30)) || 30;
-    const need = Math.ceil(dur/step);
-
-    arr.forEach(t=>{
-      const ok = contiguousOK(arr, t, step, need);
-      const b = document.createElement('button');
-      b.className = 'btn btn-ghost btn-slot' + (ok?'':' disabled');
-      b.textContent = t; b.dataset.time = t;
-      if (ok){
-        b.addEventListener('click', ()=>{
-          qsa('button', container).forEach(x=>x.classList.remove('btn-primary','active'));
-          b.classList.add('btn-primary','active');
-          window.scope = window.scope || {}; scope._selTime = t;
-          window.SEL = window.SEL || {}; SEL.time = t;
-        });
+    cells.forEach((cell, idx)=>{
+      const dayTxt = (cell.dataset.day || cell.textContent || '').trim();
+      const dayNum = /^\d+$/.test(dayTxt) ? parseInt(dayTxt,10) : NaN;
+      const inMonth = (idx >= startIdx && idx <= endIdx && !isNaN(dayNum) && dayNum>=1 && dayNum<=total);
+      if (inMonth){
+        const iso = `${ym.y}-${ym.m}-${dd2(dayNum)}`;
+        cell.dataset.iso = iso;
+        cell.classList.remove('tail');
+        cell.style.visibility = '';
+      } else {
+        cell.classList.add('tail','off');
+        cell.setAttribute('aria-disabled','true');
+        if (cell.dataset.iso) delete cell.dataset.iso;
       }
-      container.appendChild(b);
     });
-
-    // keep selected time if still valid
-    let picked = false;
-    if (keepTime && arr.includes(keepTime) && contiguousOK(arr, keepTime, step, need)){
-      const btn = Array.from(container.querySelectorAll('button')).find(x => (x.textContent||'').trim() === keepTime);
-      if (btn){ btn.click(); picked = true; }
-    }
-    // else auto-pick first contiguous
-    if (!picked && autoPickIfMissing){
-      const firstOk = Array.from(container.querySelectorAll('button')).find(b => !b.classList.contains('disabled'));
-      if (firstOk) firstOk.click();
-    }
   }
 
-  async function syncMonth(){
-    let ym = parseYM() || fallbackYM();
-    const j = await fetchFreeSlotsMonth(ym.y, ym.m);
-    if (j){
-      window.__FREE__ = j.days || {}; window.__GRAN__ = j.gran || 30;
-      applyDaysFromMap(ym, window.__FREE__);
+  // ---------- MONTH CACHE (RAM + sessionStorage) ----------
+  const TTL_MS = 3 * 60 * 1000; // 3 минуты
+  const RAM = new Map();
+  function keyYM(y,m){ return `${y}-${m}`; }
+  function getCache(y,m){
+    const k = keyYM(y,m);
+    let e = RAM.get(k);
+    if (!e){
+      try{ e = JSON.parse(sessionStorage.getItem('free:'+k) || 'null'); }catch(_){ e = null; }
+      if (e) RAM.set(k, e);
     }
+    if (e && (Date.now() - (e.ts||0)) < TTL_MS) return e;
+    return null;
+  }
+  function setCache(y,m,days,gran,tz){
+    const k = keyYM(y,m);
+    const e = { ts: Date.now(), days: days||{}, gran: gran||30, tz: tz||TZ };
+    RAM.set(k, e);
+    try{ sessionStorage.setItem('free:'+k, JSON.stringify(e)); }catch(_){}
+    return e;
+  }
+  function invalidateMonth(y,m){
+    const k = keyYM(y,m);
+    RAM.delete(k);
+    try{ sessionStorage.removeItem('free:'+k); }catch(_){}
   }
 
-  // optimistic remove + debounce book
-  let bookingBusy = false;
-  async function bookHandlerWrapper(prevApiEvent, type, data){
-    const res = await (prevApiEvent ? prevApiEvent(type, data) : undefined);
-    try{
-      if ((type==='consult_booking' || (data && data.type==='consult_booking'))){
-        if (res && res.ok){
-          // resync + keep day
-          const keep = (window.scope && scope._selDate) || '';
-          await syncMonth();
-          if (keep) renderSlotsForDate(keep, (window.scope && scope._selTime) || '', false);
-        }else{
-          // failed → rollback optimistic change if мы её ранее сделали
-          if (window.__lastOptimistic){
-            const { date, time, dur } = window.__lastOptimistic;
-            const step = (window.__GRAN__ || 30);
-            const need = Math.ceil((dur||30)/step);
-            const arr = window.__FREE__[date] || [];
-            const toAdd = Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step));
-            window.__FREE__[date] = Array.from(new Set(arr.concat(toAdd))).sort();
-            renderSlotsForDate(date, time, true);
-            window.__lastOptimistic = null;
-          }
+  // ---------- WRAPS (non-invasive) ----------
+  // 1) Оборачиваем applyDays/applyDaysState, чтобы сначала отмечать хвосты
+  (function(){
+    const wrapApply = (fnName, mapper)=>{
+      const orig = window[fnName];
+      if (typeof orig !== 'function') return;
+      window[fnName] = function(){
+        // попытка достать YM из аргументов или заголовка
+        let ym = null;
+        if (arguments.length && typeof arguments[0]==='object' && arguments[0].y && arguments[0].m){
+          ym = arguments[0];
+        } else if (arguments.length>=2) {
+          ym = { y: arguments[0], m: arguments[1] };
+        } else {
+          ym = parseYM();
         }
-      }
-    }catch(_){}
-    bookingBusy = false;
-    const btn = qs('#book,#doBook,#makeBooking'); if (btn){ btn.disabled = false; }
-    return res;
-  }
+        if (ym) try{ markTailsAndAttachISO(ym); }catch(_){}
+        return orig.apply(this, arguments);
+      };
+    };
+    wrapApply('applyDays');        // V5
+    wrapApply('applyDaysState');   // ранний блок
+  })();
 
-  // monkeypatch apiEvent to add optimistic remove & debounce
+  // 2) Оборачиваем загрузчики месяца, добавляя кэш и race-guard
+  (function(){
+    // общий реквест-id (если ранее уже добавили — используем его)
+    window.__CAL_REQ_ID__ = window.__CAL_REQ_ID__ || 0;
+
+    // V5: loadFreeSlots(y, m) -> Promise<{days,gran,tz}>
+    if (typeof window.loadFreeSlots === 'function'){
+      const orig = window.loadFreeSlots;
+      window.loadFreeSlots = async function(y, m, opt){
+        opt = opt || {};
+        const cached = getCache(y,m);
+        if (cached && !opt.force){
+          // синхронизируем глобалы для совместимости
+          window.__GRAN__ = cached.gran;
+          window.__FREE__ = cached.days;
+          return { ok:true, days: cached.days, gran: cached.gran, tz: cached.tz, cached:true };
+        }
+        const my = ++window.__CAL_REQ_ID__;
+        const res = await orig.apply(this, arguments);
+        if (my !== window.__CAL_REQ_ID__) return res; // устарел — ничего не делаем
+        try{
+          if (res && res.days){ setCache(y,m, res.days, res.gran, res.tz); }
+          else if (window.__FREE__){ setCache(y,m, window.__FREE__, window.__GRAN__||30, TZ); }
+        }catch(_){}
+        return res;
+      };
+    }
+
+    // Ранний блок: loadFreeSlotsForMonth(y, m) -> async (заполняет window.__FREE__)
+    if (typeof window.loadFreeSlotsForMonth === 'function'){
+      const orig2 = window.loadFreeSlotsForMonth;
+      window.loadFreeSlotsForMonth = async function(y, m, opt){
+        opt = opt || {};
+        const cached = getCache(y,m);
+        if (cached && !opt.force){
+          window.__GRAN__ = cached.gran;
+          window.__FREE__ = cached.days;
+          return; // из кэша уже всё положили
+        }
+        const my = ++window.__CAL_REQ_ID__;
+        await orig2.apply(this, arguments);
+        if (my !== window.__CAL_REQ_ID__) return; // устарел
+        try{
+          if (window.__FREE__){ setCache(y,m, window.__FREE__, window.__GRAN__||30, TZ); }
+        }catch(_){}
+      };
+    }
+  })();
+
+  // 3) После успешной брони инвалидация кэша и мягкое обновление
   (function(){
     const prev = window.apiEvent;
     window.apiEvent = async function(type, data){
-      if (type==='consult_booking' || (data && data.type==='consult_booking')){
-        if (bookingBusy) return { ok:false, error:'busy' };
-        bookingBusy = true;
-        const btn = qs('#book,#doBook,#makeBooking'); if (btn){ btn.disabled = true; }
-        // optimistic remove from client cache
-        const date = (data && data.date) || (window.scope && scope._selDate);
-        const time = (data && data.time) || (window.scope && scope._selTime);
-        const dur  = (data && (data.duration_min||data.duration)) || (window.scope && (scope._durMin||30)) || 30;
-        if (date && time && window.__FREE__){
-          const step = (window.__GRAN__ || 30);
-          const need = Math.ceil(dur/step);
-          const arr  = window.__FREE__[date] || [];
-          const toRemove = new Set(Array.from({length:need}, (_,i)=> addMinHHMM(time, i*step)));
-          window.__FREE__[date] = arr.filter(t => !toRemove.has(t));
-          window.__lastOptimistic = { date, time, dur };
-          // repaint quickly
-          renderSlotsForDate(date, time, false);
+      const res = prev ? await prev(type, data) : undefined;
+      try{
+        if ((type==='consult_booking' || (data && data.type==='consult_booking')) && res && res.ok){
+          const date = (data && data.date) || (window.scope && (scope._selDate||scope.selDate)) || '';
+          if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)){
+            const ym = { y: date.slice(0,4), m: date.slice(5,7) };
+            invalidateMonth(ym.y, ym.m);
+            // локально вычеркнем занятый старт, если он в __FREE__
+            const t = (data && data.time) || (window.scope && (scope._selTime||scope.selTime));
+            const dur = (data && +data.duration_min) || (window.scope && +scope._durMin) || 30;
+            const step = window.__GRAN__ || 30;
+            if (window.__FREE__ && window.__FREE__[date] && t){
+              const arr = window.__FREE__[date];
+              const idx = arr.indexOf(t);
+              if (idx>=0){
+                const removeCount = Math.max(1, Math.ceil(dur / step));
+                // удаляем непрерывную цепочку шагов
+                for (let i=0;i<removeCount;i++){
+                  const hh = (function(m){ const H=String(Math.floor(m/60)).padStart(2,'0'); const M=String(m%60).padStart(2,'0'); return H+':'+M; })(
+                    (function(s){ const m=s.split(':').map(Number); return m[0]*60+m[1]; })(t) + i*step
+                  );
+                  const j = arr.indexOf(hh); if (j>=0) arr.splice(j,1);
+                }
+                if (!arr.length){ const ym2 = parseYM(); if (ym2) markTailsAndAttachISO(ym2); }
+              }
+            }
+            // мягко перезагрузим месяц (если есть функции)
+            if (typeof window.syncMonthAndDays === 'function') { try{ await window.syncMonthAndDays(); }catch(_){} }
+            else if (typeof window.syncMonth === 'function')    { try{ await window.syncMonth(); }catch(_){} }
+          }
         }
-      }
-      return bookHandlerWrapper(prev, type, data);
+      }catch(_){}
+      return res;
     };
   })();
 
-  // wire up clicks
+  // 4) Первичная отметка хвостов после начальной отрисовки сетки
+  setTimeout(()=>{ const ym = parseYM(); if (ym) markTailsAndAttachISO(ym); }, 50);
+
+  // 5) После переключения месяца — тоже отметим хвосты (перехватываем клики на prev/next)
   document.addEventListener('click', (e)=>{
-    if (e.target.closest && (e.target.closest('#prevM') || e.target.closest('#nextM') || e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM'))){
-      setTimeout(syncMonth, 60);
+    if (e.target.closest('#cal #prevM') || e.target.closest('#cal #nextM')) { if (CAL){ CAL.dataset.busy="1"; CAL.dataset.ready="0"; const grid = CAL.querySelector(".cal-grid"); if (grid) grid.setAttribute("inert",""); }
+      setTimeout(()=>{ const ym = parseYM(); if (ym) markTailsAndAttachISO(ym); }, 60);
     }
   });
-  document.addEventListener('click', (e)=>{
-    const cell = e.target.closest && e.target.closest('#cal .cal-cell'); if (!cell) return;
-    if (cell.classList.contains('off')) return;
-    const iso = cell.dataset.iso || cell.dataset.date; if (!iso) return;
-    window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
-    renderSlotsForDate(iso, (window.scope && scope._selTime) || '', true);
-  });
-  document.addEventListener('click', (e)=>{
-    const btn = e.target.closest && e.target.closest('.dur,[data-min]'); if (!btn) return;
-    const m = +btn.getAttribute('data-min') || parseInt(btn.textContent, 10) || 30;
+})();
+</script>
+
+
+<script>
+(function(){
+  if (window.__DUR_TABS_ENHANCED__) return; window.__DUR_TABS_ENHANCED__ = true;
+  const qsa = (s,root=document)=>Array.from((root||document).querySelectorAll(s));
+  const qs = (s,root=document)=> (root||document).querySelector(s);
+
+  function setDur(m){
+    // visual state
+    qsa('.dur,[data-min]').forEach(b=>{
+      const val = +b.getAttribute('data-min') || parseInt(b.textContent,10) || 0;
+      b.classList.toggle('btn-primary', val===m);
+      b.classList.toggle('btn-ghost', val!==m);
+    });
+    // keep in scope for pick()
     window.scope = window.scope || {}; scope._durMin = m;
     window.SEL   = window.SEL   || {}; SEL.duration_min = m;
     const hidden = document.getElementById('consultDuration'); if (hidden) hidden.value = m;
+    // re-render slots for selected date if any
     const iso = (window.scope && scope._selDate) || '';
-    const keep = (window.scope && scope._selTime) || '';
-    if (iso) setTimeout(()=> renderSlotsForDate(iso, keep, true), 10);
-  }, {capture:true});
+    if (iso && typeof renderSlots==='function') {
+      // new API expects (iso, freeMap)
+      try{ renderSlots(iso, window.__FREE__); }catch(_){}
+    }
+  }
 
-  // init
-  setTimeout(syncMonth, 80);
+  // init state from existing active .dur
+  const active = qs('.dur.btn-primary, .dur.active');
+  if (active){
+    const m = +active.getAttribute('data-min') || parseInt(active.textContent,10) || 30;
+    setDur(m);
+  }
+
+  // bind clicks
+  document.addEventListener('click', (e)=>{
+    const btn = e.target.closest && e.target.closest('.dur,[data-min]');
+    if (!btn) return;
+    const m = +btn.getAttribute('data-min') || parseInt(btn.textContent,10) || 30;
+    setDur(m);
+  }, {capture:true});
 })();
 </script>
+
+
+<script>
+(function(){
+  if (window.__RENDERSLOTS_ADAPTOR__) return; window.__RENDERSLOTS_ADAPTOR__ = true;
+  const qsa=(s,root=document)=>Array.from((root||document).querySelectorAll(s));
+  const qs=(s,root=document)=>(root||document).querySelector(s);
+
+  // lightweight toast helper (no deps)
+  function toast(msg){
+    try{
+      const n=document.createElement('div');
+      n.className='toast shadow';
+      n.textContent=String(msg||''); Object.assign(n.style,{
+        position:'fixed',left:'50%',bottom:'22px',transform:'translateX(-50%)',
+        background:'#111B2C',color:'#fff',padding:'10px 14px',borderRadius:'10px',
+        zIndex:9999,opacity:'0',transition:'opacity .15s ease'
+      });
+      document.body.appendChild(n); requestAnimationFrame(()=>{ n.style.opacity='1'; });
+      setTimeout(()=>{ n.style.opacity='0'; setTimeout(()=>n.remove(),150); }, 1600);
+    }catch(_){}
+  }
+
+  // unified modern render
+  function renderSlotsModern(iso, freeMap){
+    try{
+      const wrap = document.querySelector('#slots,#slotsTime'); if (!wrap) return;
+      const arr = (freeMap && freeMap[iso]) || (window.__FREE__ && window.__FREE__[iso]) || [];
+      wrap.innerHTML = ''; wrap.classList.add('show');
+      if (!arr.length){ wrap.innerHTML = '<div class="muted">Нет свободных слотов</div>'; return; }
+
+      const dur = (window.SEL && +window.SEL.duration_min) || (window.scope && +window.scope._durMin) || 30;
+
+      arr.forEach(time=>{
+        const b = document.createElement('button');
+        b.className = 'btn btn-ghost'; b.textContent = time;
+        b.dataset.time = time; b.dataset.iso = iso;
+        b.onclick = async () => {
+          if (b.dataset.busy) return;
+          b.dataset.busy='1';
+          // visual feedback (blue) before removal
+          qsa('button', wrap).forEach(x=>x.classList.remove('btn-primary','active'));
+          b.classList.add('btn-primary','active');
+          // remove from UI quickly (120ms), per requirement
+          setTimeout(()=>{ try{ b.remove(); }catch(_){ } }, 120);
+
+          // send HOLD to backend; duration_min required; date/time from dataset
+          const payload = { type:'hold_slot', date: iso, time: time, duration_min: dur };
+          try{
+            if (typeof window.apiEvent==='function'){
+              const res = await window.apiEvent('hold_slot', payload);
+              if (!res || res.ok===false){
+                // slot is not holdable -> refresh slots to reflect server truth
+                if (window.syncMonth) try{ window.syncMonth(); }catch(_){}
+                toast((res && res.error)||'Слот недоступен');
+              }else{
+                // also remove from __FREE__ locally to avoid reappearance
+                try{
+                  const list = (window.__FREE__ && window.__FREE__[iso]) || [];
+                  const idx = list.indexOf(time); if (idx>=0) list.splice(idx,1);
+                }catch(_){}
+              }
+            }
+          }catch(err){
+            // network or handler error -> refresh
+            toast('Ошибка связи');
+            if (window.syncMonth) try{ window.syncMonth(); }catch(_){}
+          }
+        };
+        wrap.appendChild(b);
+      });
+    }catch(_){}
+  }
+
+  // Public adaptor that accepts multiple signatures
+  window.renderSlots = function(){
+    const args = Array.from(arguments);
+    if (args.length >= 2){
+      return renderSlotsModern(args[0], args[1]);
+    }else if (args.length === 1){
+      const x = args[0];
+      if (x && typeof x === 'string'){
+        window.__selDate = x;
+        return renderSlotsModern(x, window.__FREE__ || {});
+      }
+      if (x && typeof x === 'object' && x.getFullYear){
+        const iso = x.toISOString ? x.toISOString().slice(0,10) :
+                   (x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'));
+        window.__selDate = iso;
+        return renderSlotsModern(iso, window.__FREE__ || {});
+      }
+      const iso = (window.scope && window.scope._selDate) || window.__selDate || '';
+      if (iso) return renderSlotsModern(iso, window.__FREE__ || {});
+      return;
+    }else{
+      const iso = (window.scope && window.scope._selDate) || window.__selDate || '';
+      if (iso) return renderSlotsModern(iso, window.__FREE__ || {});
+    }
+  };
+})();
+</script>
+</script>
+
+<script>
+// --- SAFE PATCH: duration-aware filtering + rerender on date & duration changes ---
+(function(){
+  function toMin(label){ var m=String(label).match(/^(\d{1,2}):(\d{2})$/); if(!m) return null; return (+m[1])*60 + (+m[2]); }
+  function minToLabel(m){ var h=Math.floor(m/60), mm=m%60; return (('0'+h).slice(-2))+':'+(('0'+mm).slice(-2)); }
+  function canFit(label, freeSet, durMin, gran){
+    durMin = Number(durMin||60); gran = Number(gran||30);
+    const need = Math.max(1, Math.ceil(durMin/gran));
+    const start = toMin(label); if (start==null) return false;
+    for (let i=0;i<need;i++){
+      if (!freeSet.has(minToLabel(start + i*gran))) return false;
+    }
+    return true;
+  }
+  function guessGran(labels){
+    // try to infer step from first 2-3 slots
+    const times = labels.map(toMin).filter(x=>x!=null).sort((a,b)=>a-b);
+    for (let i=1;i<times.length;i++){
+      const diff = times[i]-times[i-1];
+      if (diff>0 && diff<=90) return diff;
+    }
+    return Number(window.__GRAN__||30);
+  }
+  function filterRenderedSlots(container){
+    try{
+      const dur = (window.SEL && +SEL.duration_min) || (window.scope && +scope._durMin) || 60;
+      const btns = Array.from(container.querySelectorAll('button'));
+      if (!btns.length) return;
+      const labels = btns.map(b=>b.textContent.trim()).filter(Boolean);
+      const gran = guessGran(labels);
+      const set = new Set(labels);
+      btns.forEach(b=>{
+        const ok = canFit(b.textContent.trim(), set, dur, gran);
+        b.style.display = ok ? '' : 'none';
+      });
+    }catch(_){}
+  }
+  // Wrap existing renderSlots to post-filter by duration
+  if (typeof window.renderSlots === 'function' && !window.__patched_renderSlots){
+    const orig = window.renderSlots;
+    window.renderSlots = function(iso, freeMap){
+      const res = orig.apply(this, arguments);
+      const wrap = document.querySelector('#slots, #slotsTime');
+      if (wrap) filterRenderedSlots(wrap);
+      // remember selected date
+      window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
+      return res;
+    };
+    window.__patched_renderSlots = true;
+  }
+  // Also try to hook renderSlotsForDate if present
+  if (typeof window.renderSlotsForDate === 'function' && !window.__patched_renderSlotsForDate){
+    const orig = window.renderSlotsForDate;
+    window.renderSlotsForDate = function(iso){
+      const res = orig.apply(this, arguments);
+      const wrap = document.querySelector('#slots, #slotsTime');
+      if (wrap) filterRenderedSlots(wrap);
+      window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
+      return res;
+    };
+    window.__patched_renderSlotsForDate = true;
+  }
+
+  // Duration buttons (30/60/90)
+  function setDur(m){
+    window.SEL = window.SEL || {}; SEL.duration_min = Number(m)||60;
+    window.scope = window.scope || {}; scope._durMin = SEL.duration_min;
+    // update buttons
+    document.querySelectorAll('.dur').forEach(btn=>{
+      const val = Number(btn.getAttribute('data-min')||btn.dataset.min||60);
+      btn.classList.toggle('btn-primary', val===SEL.duration_min);
+      btn.classList.toggle('btn-ghost', val!==SEL.duration_min);
+    });
+    // rerender current date
+    const iso = (window.scope && scope._selDate) || window.__selDate;
+    if (iso){
+      if (typeof window.renderSlotsForDate === 'function') window.renderSlotsForDate(iso);
+      else if (typeof window.renderSlots === 'function' && window.__FREE__) window.renderSlots(iso, window.__FREE__);
+      // If neither is present yet, we'll rely on next render hook
+    }
+  }
+  document.addEventListener('click', function(e){
+    const b = e.target && e.target.closest && e.target.closest('.dur');
+    if (!b) return;
+    const m = Number(b.getAttribute('data-min')||b.dataset.min||60);
+    setDur(m);
+  }, {capture:true});
+  // default duration
+  setTimeout(function(){ setDur((window.SEL && SEL.duration_min) || 60); }, 0);
+
+  // Telegram desktop init (safe)
+  try{
+    if (window.Telegram && Telegram.WebApp){
+      Telegram.WebApp.ready();
+      if (Telegram.WebApp.expand) Telegram.WebApp.expand();
+    }
+  }catch(_){}
+})();
+</script>
+
+</body>
+</html>
+
+<!-- === HOTFIX V7.2 — Calendar × GAS (robust YM parsing, optimistic remove, debounce book) === -->
+<script>/* disabled broken block to avoid syntax errors; functionality duplicated elsewhere */</script>
