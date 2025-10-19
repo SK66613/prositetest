@@ -135,6 +135,17 @@
     let GRAN = 30;  // шаг
     let selDate = null; let selTime = null; let selDur = 30;
 
+    // === fix: request guard + auto-select first free day ===
+    let REQ = 0;
+    function autoSelectFirstDayWithSlots(){
+      const days = Object.keys(FREE).filter(d => Array.isArray(FREE[d]) && FREE[d].length);
+      if (!days.length) return;
+      selDate = days[0];
+      const cell = document.querySelector(`#calGrid [data-iso="${selDate}"]`);
+      if (cell){ document.querySelectorAll('#calGrid .cal-cell.sel').forEach(x=>x.classList.remove('sel')); cell.classList.add('sel'); }
+      renderSlots(selDate);
+    }
+
     // ===== UI wire =====
     document.getElementById('prevM').onclick = ()=> shiftMonth(-1);
     document.getElementById('nextM').onclick = ()=> shiftMonth(1);
@@ -194,10 +205,27 @@
     }
 
     async function syncMonth(){
-      const first = `${curY}-${curM}-01`; const last = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
+      const my = ++REQ; // guard against race conditions
+      const first = `${curY}-${curM}-01`;
+      const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
+
+      // lightweight loader in the grid
+      const grid = document.getElementById('calGrid');
+      if (grid) grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
+
       const data = await apiGet('/api/slots/free', { from:first, to:last, gran:30, lead_min:60, tz });
-      if (data && data.ok){ FREE = data.days||{}; GRAN = data.gran||30; drawCalendar(curY,curM); }
-      else qs('#status').textContent = 'Ошибка загрузки слотов';
+      if (my !== REQ) return; // outdated response — ignore
+
+      if (data && data.ok){
+        FREE = data.days || {};
+        GRAN = data.gran || 30;
+        // 1) draw grid, 2) color by FREE, 3) auto-select first available day
+        drawCalendar(curY,curM);
+        applyDaysState(curY,curM);
+        autoSelectFirstDayWithSlots();
+      } else {
+        document.getElementById('status').textContent = 'Ошибка загрузки слотов';
+      }
     }
 
     async function onBook(){
