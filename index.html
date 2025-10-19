@@ -4,14 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  
-  <!-- CSP: добавил workers.dev в connect-src -->
+
+  <!-- CSP: разрешаем воркера -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval';
                  script-src 'self' https://telegram.org https://*.telegram.org 'unsafe-inline' 'unsafe-eval';
                  connect-src 'self' https://*.workers.dev; 
                  img-src 'self' https: data:; font-src 'self' https: data:; frame-src https: telegram.org *.telegram.org;"/>
-  
+
   <title>Маркетолог — консультации</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <style>
@@ -24,7 +24,7 @@
     .brand{ font-weight:800; letter-spacing:.4px }
     .muted{ color:var(--muted) }
     .card{ background:var(--card); border:1px solid var(--stroke); border-radius:16px; padding:16px; backdrop-filter:blur(8px) }
-    
+
     /* nav */
     #spa-nav{ position:sticky; top:0; z-index:10; background:rgba(10,12,22,.6); backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.06); margin:8px; padding:6px; border-radius:14px; display:flex; gap:6px }
     #spa-nav .btn{ appearance:none; border:0; background:transparent; color:var(--text); font-weight:700; padding:8px 10px; border-radius:10px; cursor:pointer }
@@ -130,15 +130,25 @@
     async function apiPost(path, body){ body=body||{}; if(!body.tg_id && tgId()) body.tg_id=String(tgId()); const r=await fetch(APP_CONFIG.API_BASE+path,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); const t=await r.text(); try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} } }
 
     // ===== calendar state =====
-    let curY, curM; // строки YYYY, MM
-    let FREE = {};  // { 'YYYY-MM-DD': ['HH:MM', ...] }
-    let GRAN = 30;  // шаг
+    let curY, curM; // YYYY, MM
+    let FREE = {};  // {'YYYY-MM-DD':['HH:MM',...]}
+    let GRAN = 30;  // шаг слота
     let selDate = null; let selTime = null; let selDur = 30;
 
-    // === fix: request guard + auto-select first free day ===
+    // защита от гонок и авто-выбор первого дня
     let REQ = 0;
+    function timesFor(iso){
+      const raw = Array.isArray(FREE[iso]) ? FREE[iso] : [];
+      const norm = raw.map(t=>{
+        const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
+        if (!m) return null; return `${dd2(m[1])}:${m[2]}`;
+      }).filter(Boolean);
+      const uniq = Array.from(new Set(norm));
+      uniq.sort((a,b)=> a.localeCompare(b));
+      return uniq;
+    }
     function autoSelectFirstDayWithSlots(){
-      const days = Object.keys(FREE).filter(d => Array.isArray(FREE[d]) && FREE[d].length);
+      const days = Object.keys(FREE).filter(d => timesFor(d).length);
       if (!days.length) return;
       selDate = days[0];
       const cell = document.querySelector(`#calGrid [data-iso="${selDate}"]`);
@@ -153,7 +163,7 @@
     document.getElementById('bookBtn').onclick = onBook;
 
     function nowYM(){ const d=new Date(); return { y:String(d.getFullYear()), m:dd2(d.getMonth()+1) }; }
-    function shiftMonth(delta){ const y=+curY, m=+curM; const d=new Date(y, m-1+delta, 1); curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1); syncMonth(); }
+    function shiftMonth(delta){ const y=+curY, m=+curM; const d=new Date(y, m-1+delta, 1); curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1); selDate=null; selTime=null; syncMonth(); }
 
     function drawCalendar(y, m){
       const grid = document.getElementById('calGrid'); grid.innerHTML='';
@@ -170,17 +180,15 @@
         btn.onclick = ()=>{ selDate=iso; qsa('.cal-cell.sel',grid).forEach(x=>x.classList.remove('sel')); btn.classList.add('sel'); renderSlots(iso); };
         grid.appendChild(btn);
       }
-      applyDaysState(y, m);
     }
 
     function applyDaysState(y,m){
-      const grid = document.getElementById('calGrid');
-      qsa('.cal-cell', grid).forEach(cell=>{
+      const grid = document.getElementById('calGrid'); if (!grid) return;
+      grid.querySelectorAll('.cal-cell').forEach(cell=>{
         if (cell.classList.contains('cal-dow') || !cell.dataset.iso) return;
-        const iso = cell.dataset.iso; const arr = FREE[iso] || [];
-        const off = !(Array.isArray(arr) && arr.length>0);
-        cell.classList.toggle('off', off); cell.classList.toggle('muted', off);
-        if (off) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+        const iso = cell.dataset.iso; const arr = timesFor(iso); const has = arr.length>0;
+        cell.classList.toggle('off', !has); cell.classList.toggle('muted', !has);
+        if (!has) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
       });
     }
 
@@ -194,7 +202,8 @@
 
     function renderSlots(iso){
       const wrap = document.getElementById('slots'); wrap.innerHTML=''; wrap.classList.add('show'); selTime=null;
-      const arr = FREE[iso] || []; if (!arr.length){ wrap.innerHTML='<div class="muted">Нет свободных слотов</div>'; return; }
+      const arr = timesFor(iso);
+      if (!arr.length){ wrap.innerHTML='<div class="muted">Нет свободных слотов</div>'; return; }
       const filtered = filterStartsByDuration(arr, selDur, GRAN);
       filtered.forEach(label=>{
         const b=document.createElement('button'); b.className='btn'; b.textContent=label; b.dataset.time=label;
@@ -209,7 +218,6 @@
       const first = `${curY}-${curM}-01`;
       const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
 
-      // lightweight loader in the grid
       const grid = document.getElementById('calGrid');
       if (grid) grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
 
@@ -219,10 +227,9 @@
       if (data && data.ok){
         FREE = data.days || {};
         GRAN = data.gran || 30;
-        // 1) draw grid, 2) color by FREE, 3) auto-select first available day
-        drawCalendar(curY,curM);
-        applyDaysState(curY,curM);
-        autoSelectFirstDayWithSlots();
+        drawCalendar(curY,curM);     // 1) сетка
+        applyDaysState(curY,curM);   // 2) раскраска
+        autoSelectFirstDayWithSlots();// 3) сразу показать слоты первого доступного дня
       } else {
         document.getElementById('status').textContent = 'Ошибка загрузки слотов';
       }
