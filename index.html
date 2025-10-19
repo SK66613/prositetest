@@ -3021,7 +3021,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbzieQs5aBbptrJ5TlCcGTPHPHEQgvftRUm6c9UPZ9QbpF-_IsqXRhqC7JTzAJt9nwNL/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbyeOLIdsEiV2HIWgA1W0Evs9v3KkosjAgQNoLp06e8KnmMdHH06futzIhjWeIw8f3Hx/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
@@ -5995,6 +5995,107 @@ window.__addBookingDatePrefixTo = window.__addBookingDatePrefixTo || function(el
 })();
 </script>
 </script>
+
+<script>
+// --- SAFE PATCH: duration-aware filtering + rerender on date & duration changes ---
+(function(){
+  function toMin(label){ var m=String(label).match(/^(\d{1,2}):(\d{2})$/); if(!m) return null; return (+m[1])*60 + (+m[2]); }
+  function minToLabel(m){ var h=Math.floor(m/60), mm=m%60; return (('0'+h).slice(-2))+':'+(('0'+mm).slice(-2)); }
+  function canFit(label, freeSet, durMin, gran){
+    durMin = Number(durMin||60); gran = Number(gran||30);
+    const need = Math.max(1, Math.ceil(durMin/gran));
+    const start = toMin(label); if (start==null) return false;
+    for (let i=0;i<need;i++){
+      if (!freeSet.has(minToLabel(start + i*gran))) return false;
+    }
+    return true;
+  }
+  function guessGran(labels){
+    // try to infer step from first 2-3 slots
+    const times = labels.map(toMin).filter(x=>x!=null).sort((a,b)=>a-b);
+    for (let i=1;i<times.length;i++){
+      const diff = times[i]-times[i-1];
+      if (diff>0 && diff<=90) return diff;
+    }
+    return Number(window.__GRAN__||30);
+  }
+  function filterRenderedSlots(container){
+    try{
+      const dur = (window.SEL && +SEL.duration_min) || (window.scope && +scope._durMin) || 60;
+      const btns = Array.from(container.querySelectorAll('button'));
+      if (!btns.length) return;
+      const labels = btns.map(b=>b.textContent.trim()).filter(Boolean);
+      const gran = guessGran(labels);
+      const set = new Set(labels);
+      btns.forEach(b=>{
+        const ok = canFit(b.textContent.trim(), set, dur, gran);
+        b.style.display = ok ? '' : 'none';
+      });
+    }catch(_){}
+  }
+  // Wrap existing renderSlots to post-filter by duration
+  if (typeof window.renderSlots === 'function' && !window.__patched_renderSlots){
+    const orig = window.renderSlots;
+    window.renderSlots = function(iso, freeMap){
+      const res = orig.apply(this, arguments);
+      const wrap = document.querySelector('#slots, #slotsTime');
+      if (wrap) filterRenderedSlots(wrap);
+      // remember selected date
+      window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
+      return res;
+    };
+    window.__patched_renderSlots = true;
+  }
+  // Also try to hook renderSlotsForDate if present
+  if (typeof window.renderSlotsForDate === 'function' && !window.__patched_renderSlotsForDate){
+    const orig = window.renderSlotsForDate;
+    window.renderSlotsForDate = function(iso){
+      const res = orig.apply(this, arguments);
+      const wrap = document.querySelector('#slots, #slotsTime');
+      if (wrap) filterRenderedSlots(wrap);
+      window.scope = window.scope || {}; scope._selDate = iso; window.__selDate = iso;
+      return res;
+    };
+    window.__patched_renderSlotsForDate = true;
+  }
+
+  // Duration buttons (30/60/90)
+  function setDur(m){
+    window.SEL = window.SEL || {}; SEL.duration_min = Number(m)||60;
+    window.scope = window.scope || {}; scope._durMin = SEL.duration_min;
+    // update buttons
+    document.querySelectorAll('.dur').forEach(btn=>{
+      const val = Number(btn.getAttribute('data-min')||btn.dataset.min||60);
+      btn.classList.toggle('btn-primary', val===SEL.duration_min);
+      btn.classList.toggle('btn-ghost', val!==SEL.duration_min);
+    });
+    // rerender current date
+    const iso = (window.scope && scope._selDate) || window.__selDate;
+    if (iso){
+      if (typeof window.renderSlotsForDate === 'function') window.renderSlotsForDate(iso);
+      else if (typeof window.renderSlots === 'function' && window.__FREE__) window.renderSlots(iso, window.__FREE__);
+      // If neither is present yet, we'll rely on next render hook
+    }
+  }
+  document.addEventListener('click', function(e){
+    const b = e.target && e.target.closest && e.target.closest('.dur');
+    if (!b) return;
+    const m = Number(b.getAttribute('data-min')||b.dataset.min||60);
+    setDur(m);
+  }, {capture:true});
+  // default duration
+  setTimeout(function(){ setDur((window.SEL && SEL.duration_min) || 60); }, 0);
+
+  // Telegram desktop init (safe)
+  try{
+    if (window.Telegram && Telegram.WebApp){
+      Telegram.WebApp.ready();
+      if (Telegram.WebApp.expand) Telegram.WebApp.expand();
+    }
+  }catch(_){}
+})();
+</script>
+
 </body>
 </html>
 
