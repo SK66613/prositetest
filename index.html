@@ -4,14 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <!-- CSP: разрешаем воркера -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval';
                  script-src 'self' https://telegram.org https://*.telegram.org 'unsafe-inline' 'unsafe-eval';
                  connect-src 'self' https://*.workers.dev; 
                  img-src 'self' https: data:; font-src 'self' https: data:; frame-src https: telegram.org *.telegram.org;"/>
-
   <title>Маркетолог — консультации</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <style>
@@ -24,13 +21,9 @@
     .brand{ font-weight:800; letter-spacing:.4px }
     .muted{ color:var(--muted) }
     .card{ background:var(--card); border:1px solid var(--stroke); border-radius:16px; padding:16px; backdrop-filter:blur(8px) }
-
-    /* nav */
     #spa-nav{ position:sticky; top:0; z-index:10; background:rgba(10,12,22,.6); backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.06); margin:8px; padding:6px; border-radius:14px; display:flex; gap:6px }
     #spa-nav .btn{ appearance:none; border:0; background:transparent; color:var(--text); font-weight:700; padding:8px 10px; border-radius:10px; cursor:pointer }
     #spa-nav .btn.active{ background:linear-gradient(135deg,var(--primary),var(--blue)); color:#fff }
-
-    /* calendar */
     .calendar{ user-select:none }
     .cal-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; gap:8px }
     .cal-head .mon{ font-weight:800 }
@@ -39,24 +32,19 @@
     .cal-cell.muted{ opacity:.35 }
     .cal-cell.off{ opacity:.25; pointer-events:none }
     .cal-dow{ opacity:.6; font-weight:700; font-size:12px }
-
-    /* slots */
     #slots{ display:none; gap:8px; flex-wrap:wrap }
     #slots.show{ display:flex }
     .btn{ appearance:none; border:1px solid rgba(255,255,255,.18); background:transparent; color:var(--text); border-radius:12px; padding:8px 10px; font-weight:700; cursor:pointer }
     .btn-primary{ background:linear-gradient(135deg,var(--primary),var(--blue)); color:#fff; border-color:transparent; box-shadow:0 10px 20px rgba(91,140,255,.32) }
     .off{ opacity:.5 }
-
     .row{ display:grid; grid-template-columns:1fr auto; align-items:center; gap:10px }
     .stack{ display:grid; gap:10px }
   </style>
-
-  <!-- Конфиг: фронт ходит в Cloudflare Worker -->
   <script>
     window.APP_CONFIG = {
       TG_BOT_USERNAME: 'serge_kamensky_bot',
       API_BASE: 'https://cifrovichkoff.cyberian13.workers.dev',
-      GAS_WEBHOOK: '', // не используется
+      GAS_WEBHOOK: '',
       API_KEY: '',
       USE_TG_SIGNATURE: true
     };
@@ -72,12 +60,10 @@
       </div>
     </div>
   </header>
-
   <nav id="spa-nav" class="container">
     <button class="btn active" data-page="consult">📅 Консультация</button>
     <button class="btn" data-page="about">👤 Обо мне</button>
   </nav>
-
   <main class="container">
     <section class="page" id="consult">
       <div class="card stack">
@@ -107,91 +93,79 @@
         </div>
       </div>
     </section>
-
     <section class="page" id="about" style="display:none">
       <div class="card">
         <h3>Обо мне</h3>
-        <p class="muted">Коротко: работаем на результат, считаем деньги и строим вменяемую систему маркетинга. Ниже только демонстрационный раздел — основной поток теперь через Cloudflare Worker + Google Sheets.</p>
+        <p class="muted">Демо: основной бэкенд — Cloudflare Worker + Google Sheets.</p>
       </div>
     </section>
   </main>
-
   <script>
-    // ===== helpers =====
     const dd2 = n => String(n).padStart(2,'0');
     const qs  = (s,root=document)=>root.querySelector(s);
     const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
     const tg = (window.Telegram && Telegram.WebApp) ? Telegram.WebApp : null;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
     function tgId(){ try{ return tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id; }catch(_){ return null; } }
-
     function urlWithParams(base, params){ const u=new URL(base); Object.entries(params||{}).forEach(([k,v])=>{ if(v!==undefined&&v!==null) u.searchParams.set(k,String(v)); }); return u; }
     async function apiGet(path, params){ const u=urlWithParams(APP_CONFIG.API_BASE+path, params); const r=await fetch(u,{method:'GET'}); const t=await r.text(); try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} } }
     async function apiPost(path, body){ body=body||{}; if(!body.tg_id && tgId()) body.tg_id=String(tgId()); const r=await fetch(APP_CONFIG.API_BASE+path,{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); const t=await r.text(); try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} } }
-
-    // ===== calendar state =====
-    let curY, curM; // YYYY, MM
-    let FREE = {};  // {'YYYY-MM-DD':['HH:MM',...]}
-    let GRAN = 30;  // шаг слота
-    let selDate = null; let selTime = null; let selDur = 30;
-
-    // защита от гонок и авто-выбор первого дня
-    let REQ = 0;
-    function timesFor(iso){
-      const raw = Array.isArray(FREE[iso]) ? FREE[iso] : [];
-      const norm = raw.map(t=>{
-        const m = String(t).match(/^(\d{1,2}):(\d{2})$/);
-        if (!m) return null; return `${dd2(m[1])}:${m[2]}`;
-      }).filter(Boolean);
-      const uniq = Array.from(new Set(norm));
-      uniq.sort((a,b)=> a.localeCompare(b));
-      return uniq;
+    let curY, curM; let FREE = {}; let GRAN = 30; let selDate = null; let selTime = null; let selDur = 30;
+    let REQ = 0; let pollTimer = null; let __busy = false;
+    function arraysEq(a,b){ if(!Array.isArray(a)||!Array.isArray(b)) return false; if (a.length!==b.length) return false; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) return false; return true; }
+    function startDayPolling(iso){
+      if (pollTimer) { clearInterval(pollTimer); pollTimer=null; }
+      if (!iso) return;
+      async function refreshOnce(){
+        const data = await apiGet('/api/slots/free', { from: iso, to: iso, gran: 30, lead_min: 60, tz });
+        if (data && data.ok && data.days && data.days[iso]){
+          const prev = FREE[iso] || []; const next = data.days[iso] || [];
+          if (!arraysEq(prev, next)){
+            FREE[iso] = next;
+            if (selDate===iso && selTime && !next.includes(selTime)){
+              selTime = null; const st = qs('#status'); if (st) st.textContent = 'Этот слот уже заняли';
+            }
+            renderSlots(iso); applyDaysState(curY, curM);
+          }
+        }
+      }
+      pollTimer = setInterval(refreshOnce, 10000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOnce(); }, { once:true });
+      refreshOnce();
     }
-    function autoSelectFirstDayWithSlots(){
-      const days = Object.keys(FREE).filter(d => timesFor(d).length);
-      if (!days.length) return;
-      selDate = days[0];
-      const cell = document.querySelector(`#calGrid [data-iso="${selDate}"]`);
-      if (cell){ document.querySelectorAll('#calGrid .cal-cell.sel').forEach(x=>x.classList.remove('sel')); cell.classList.add('sel'); }
-      renderSlots(selDate);
-    }
-
-    // ===== UI wire =====
-    document.getElementById('prevM').onclick = ()=> shiftMonth(-1);
-    document.getElementById('nextM').onclick = ()=> shiftMonth(1);
+    document.getElementById('prevM').onclick = ()=> { if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } shiftMonth(-1); };
+    document.getElementById('nextM').onclick = ()=> { if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } shiftMonth(1); };
     qsa('.dur').forEach(b=> b.onclick = ()=>{ qsa('.dur').forEach(x=>x.classList.remove('btn-primary')); b.classList.add('btn-primary'); selDur = +b.dataset.dur || 30; if (selDate) renderSlots(selDate); });
     document.getElementById('bookBtn').onclick = onBook;
-
     function nowYM(){ const d=new Date(); return { y:String(d.getFullYear()), m:dd2(d.getMonth()+1) }; }
-    function shiftMonth(delta){ const y=+curY, m=+curM; const d=new Date(y, m-1+delta, 1); curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1); selDate=null; selTime=null; syncMonth(); }
-
+    function shiftMonth(delta){ const y=+curY, m=+curM; const d=new Date(y, m-1+delta, 1); curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1); syncMonth(); }
     function drawCalendar(y, m){
       const grid = document.getElementById('calGrid'); grid.innerHTML='';
       const mon = new Date(+y, +m-1, 1); const monLabel = mon.toLocaleDateString('ru-RU', { month:'long', year:'numeric' });
       document.getElementById('monLabel').textContent = monLabel.charAt(0).toUpperCase()+monLabel.slice(1);
       const dow = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
       dow.forEach(d=>{ const div=document.createElement('div'); div.className='cal-cell cal-dow'; div.textContent=d; grid.appendChild(div); });
-      const firstDow = (new Date(+y, +m-1, 1).getDay()+6)%7; // 0..6 (Пн..Вс)
+      const firstDow = (new Date(+y, +m-1, 1).getDay()+6)%7;
       for(let i=0;i<firstDow;i++){ const sp=document.createElement('div'); sp.className='cal-cell muted'; sp.textContent=''; grid.appendChild(sp); }
       const daysInMonth = new Date(+y, +m, 0).getDate();
       for(let d=1; d<=daysInMonth; d++){
         const iso = `${y}-${m}-${dd2(d)}`;
         const btn = document.createElement('div'); btn.className='cal-cell'; btn.textContent=d; btn.dataset.iso=iso;
-        btn.onclick = ()=>{ selDate=iso; qsa('.cal-cell.sel',grid).forEach(x=>x.classList.remove('sel')); btn.classList.add('sel'); renderSlots(iso); };
+        btn.onclick = ()=>{ selDate=iso; qsa('.cal-cell.sel',grid).forEach(x=>x.classList.remove('sel')); btn.classList.add('sel'); renderSlots(iso); startDayPolling(iso); };
         grid.appendChild(btn);
       }
+      applyDaysState(y, m);
     }
-
     function applyDaysState(y,m){
-      const grid = document.getElementById('calGrid'); if (!grid) return;
-      grid.querySelectorAll('.cal-cell').forEach(cell=>{
+      const grid = document.getElementById('calGrid');
+      qsa('.cal-cell', grid).forEach(cell=>{
         if (cell.classList.contains('cal-dow') || !cell.dataset.iso) return;
-        const iso = cell.dataset.iso; const arr = timesFor(iso); const has = arr.length>0;
-        cell.classList.toggle('off', !has); cell.classList.toggle('muted', !has);
-        if (!has) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+        const iso = cell.dataset.iso; const arr = FREE[iso] || [];
+        const off = !(Array.isArray(arr) && arr.length>0);
+        cell.classList.toggle('off', off); cell.classList.toggle('muted', off);
+        if (off) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
       });
     }
-
     function filterStartsByDuration(starts, durMin, step){
       if (!Array.isArray(starts) || !starts.length) return [];
       const need = Math.ceil(durMin / step);
@@ -199,12 +173,10 @@
       const set = new Set(starts.map(toMin).filter(x=>x!=null));
       return starts.filter(t=>{ const m=toMin(t); if(m==null) return false; for(let i=0;i<need;i++){ if(!set.has(m+i*step)) return false } return true; });
     }
-
     function renderSlots(iso){
-      const wrap = document.getElementById('slots'); wrap.innerHTML=''; wrap.classList.add('show'); selTime=null;
-      const arr = timesFor(iso);
-      if (!arr.length){ wrap.innerHTML='<div class="muted">Нет свободных слотов</div>'; return; }
-      const filtered = filterStartsByDuration(arr, selDur, GRAN);
+      const wrap = document.getElementById('slots'); wrap.innerHTML=''; wrap.classList.add('show'); 
+      const arr = FREE[iso] || []; if (!arr.length){ wrap.innerHTML='<div class="muted">Нет свободных слотов</div>'; return; }
+      const filtered = filterStartsByDuration(arr, selDur, GRAN); selTime=null;
       filtered.forEach(label=>{
         const b=document.createElement('button'); b.className='btn'; b.textContent=label; b.dataset.time=label;
         b.onclick=()=>{ qsa('#slots .btn').forEach(x=>x.classList.remove('btn-primary')); b.classList.add('btn-primary'); selTime=label; };
@@ -212,42 +184,41 @@
       });
       if (!filtered.length) wrap.innerHTML='<div class="muted">Нет подходящих стартов для '+selDur+' мин</div>';
     }
-
     async function syncMonth(){
-      const my = ++REQ; // guard against race conditions
+      const my = ++REQ;
       const first = `${curY}-${curM}-01`;
       const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
-
       const grid = document.getElementById('calGrid');
       if (grid) grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
-
       const data = await apiGet('/api/slots/free', { from:first, to:last, gran:30, lead_min:60, tz });
-      if (my !== REQ) return; // outdated response — ignore
-
+      if (my !== REQ) return;
       if (data && data.ok){
-        FREE = data.days || {};
-        GRAN = data.gran || 30;
-        drawCalendar(curY,curM);     // 1) сетка
-        applyDaysState(curY,curM);   // 2) раскраска
-        autoSelectFirstDayWithSlots();// 3) сразу показать слоты первого доступного дня
-      } else {
-        document.getElementById('status').textContent = 'Ошибка загрузки слотов';
-      }
+        FREE = data.days || {}; GRAN = data.gran || 30;
+        drawCalendar(curY,curM); applyDaysState(curY,curM);
+        const days = Object.keys(FREE).filter(d => Array.isArray(FREE[d]) && FREE[d].length);
+        if (days.length){ const iso = days.includes(selDate)? selDate : days[0]; selDate = iso; const cell = document.querySelector(`#calGrid [data-iso="${iso}"]`); if (cell){ document.querySelectorAll('#calGrid .cal-cell.sel').forEach(x=>x.classList.remove('sel')); cell.classList.add('sel'); } renderSlots(iso); startDayPolling(iso); }
+      } else { document.getElementById('status').textContent = 'Ошибка загрузки слотов'; }
     }
-
     async function onBook(){
-      if (!selDate || !selTime){ qs('#status').textContent='Выберите дату и время'; return; }
-      const contact = qs('#contact').value.trim(); if(!contact){ qs('#status').textContent='Укажите контакт для связи'; return; }
-      // быстрый hold
-      const hold = await apiPost('/api/slots/hold', { date:selDate, time:selTime, duration_min:selDur });
-      if (!hold || !hold.ok){ qs('#status').textContent='Слот уже занят, обновляю…'; await syncMonth(); return; }
-      const res = await apiPost('/api/consult/book', { date:selDate, time:selTime, duration_min:selDur, format:'call', contact });
-      if (res && res.ok){ qs('#status').textContent='Готово! Бронирование '+(res.booking_id||'создано'); await syncMonth(); }
-      else { qs('#status').textContent='Не удалось забронировать'; await syncMonth(); }
+      if (__busy) return; __busy = true;
+      try{
+        if (!selDate || !selTime){ qs('#status').textContent='Выберите дату и время'; return; }
+        const contact = qs('#contact').value.trim(); if(!contact){ qs('#status').textContent='Укажите контакт для связи'; return; }
+        const hold = await apiPost('/api/slots/hold', { date:selDate, time:selTime, duration_min:selDur });
+        if (!hold || !hold.ok){
+          qs('#status').textContent = (hold && hold.error==='bad_args') ? 'Нет tg_id — откройте через Telegram' : 'Слот уже занят, обновляю…';
+          await syncMonth(); return;
+        }
+        const res = await apiPost('/api/consult/book', { date:selDate, time:selTime, duration_min:selDur, format:'call', contact });
+        if (res && res.ok){
+          qs('#status').textContent = (res.reused?'Бронь уже была: ':'Готово! Бронь ') + (res.booking_id||'создана');
+          if (FREE[selDate]) FREE[selDate] = FREE[selDate].filter(t => t !== selTime);
+          renderSlots(selDate); applyDaysState(curY, curM);
+          await syncMonth();
+        } else { qs('#status').textContent='Не удалось забронировать'; await syncMonth(); }
+      } finally { __busy = false; }
     }
-
-    // init
-    (function init(){ const ym=nowYM(); curY=ym.y; curM=ym.m; qsa('.dur')[0].classList.add('btn-primary'); syncMonth(); })();
+    (function init(){ const d=new Date(); curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1); qsa('.dur')[0].classList.add('btn-primary'); syncMonth(); })();
   </script>
 </body>
 </html>
