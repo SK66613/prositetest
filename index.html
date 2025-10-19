@@ -56,7 +56,7 @@
   <script>
     window.APP_CONFIG = {
       TG_BOT_USERNAME: 'serge_kamensky_bot',
-      API_BASE: 'https://cifrovichkoff.cyberian13.workers.dev', // ← замени при необходимости
+      API_BASE: 'https://cifrovichkoff.cyberian13.workers.dev', // ← при необходимости поменяй
       API_KEY: '',
       USE_TG_SIGNATURE: true
     };
@@ -116,17 +116,16 @@
     <section class="page" id="about" style="display:none">
       <div class="card">
         <h3>Обо мне</h3>
-        <p class="muted">Демо: бэкенд — Cloudflare Worker + Google Sheets. Слоты учитывают длительность 30/60/90 и блокировки.</p>
+        <p class="muted">Демо: Cloudflare Worker + Google Sheets. Слоты учитывают длительность 30/60/90 и блокировки.</p>
       </div>
     </section>
   </main>
 
   <script>
-    // ========== helpers ==========
+    // ---------- helpers ----------
     const dd2 = n => String(n).padStart(2,'0');
     const qs  = (s,root=document)=>root.querySelector(s);
     const qsa = (s,root=document)=>Array.from(root.querySelectorAll(s));
-
     const tg = (window.Telegram && Telegram.WebApp) ? Telegram.WebApp : null;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
 
@@ -135,252 +134,169 @@
     function getInitData(){ try{ return tg?.initData || '' }catch(_){ return '' } }
 
     function urlWithParams(base, params){ const u=new URL(base); Object.entries(params||{}).forEach(([k,v])=>{ if(v!==undefined&&v!==null) u.searchParams.set(k,String(v)); }); return u; }
-    async function apiGet(path, params){
-      const u = urlWithParams(APP_CONFIG.API_BASE+path, params);
-      const r = await fetch(u,{method:'GET'});
-      const t = await r.text();
-      try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} }
-    }
+    async function apiGet(path, params){ const r=await fetch(urlWithParams(APP_CONFIG.API_BASE+path, params)); const t=await r.text(); try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} } }
     async function apiPost(path, body){
       body = body || {};
-      // пробрасываем tg контекст в воркер -> GAS
-      if (!body.tg_id)           body.tg_id        = String(getTgId()||'');
-      if (!body._start_param)    body._start_param = getStartParam();
-      if (!body._init_data)      body._init_data   = getInitData();
-      const r = await fetch(APP_CONFIG.API_BASE+path,{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body)
-      });
-      const t = await r.text();
-      try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} }
+      if (!body.tg_id)        body.tg_id        = String(getTgId()||'');
+      if (!body._start_param) body._start_param = getStartParam();
+      if (!body._init_data)   body._init_data   = getInitData();
+      const r=await fetch(APP_CONFIG.API_BASE+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const t=await r.text(); try{ return JSON.parse(t);}catch{ return {ok:false, error:'bad_json', raw:t} }
     }
 
-    // ========== calendar state ==========
-    let curY, curM;         // YYYY, MM
-    let FREE = {};          // { 'YYYY-MM-DD': ['HH:MM', ...] }
-    let GRAN = 30;          // шаг
-    let selDate = null, selTime = null, selDur = 30;
+    // ---------- state ----------
+    let curY, curM;           // YYYY, MM
+    let FREE = {};            // {'YYYY-MM-DD':['HH:MM',...]}
+    let GRAN = 30;            // шаг слотов
+    let selDate=null, selTime=null, selDur=30;
+    let REQ=0, pollTimer=null;
 
-    // запросы/поллинг/блокировка
-    let REQ = 0, pollTimer = null, __busy = false;
+    function nowYM(){ const d=new Date(); return { y:String(d.getFullYear()), m:dd2(d.getMonth()+1) }; }
 
-    function arraysEq(a,b){ if(!Array.isArray(a)||!Array.isArray(b)) return false; if (a.length!==b.length) return false; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) return false; return true; }
-
-    function autoSelectFirstDay(){
-      const days = Object.keys(FREE).filter(d => Array.isArray(FREE[d]) && FREE[d].length);
-      if (!days.length) return;
-      selDate = days.includes(selDate) ? selDate : days[0];
-      const cell = document.querySelector(`#calGrid [data-iso="${selDate}"]`);
-      if (cell){ document.querySelectorAll('#calGrid .cal-cell.sel').forEach(x=>x.classList.remove('sel')); cell.classList.add('sel'); }
-      renderSlots(selDate);
-      startDayPolling(selDate);
-    }
-
-    function startDayPolling(iso){
-      if (pollTimer) { clearInterval(pollTimer); pollTimer=null; }
-      if (!iso) return;
-
-      async function refreshOnce(){
-        const data = await apiGet('/api/slots/free', {
-          from: iso, to: iso, gran: 30, lead_min: 60, tz,
-          duration_min: selDur // чтобы кэш воркера различал длительности
-        });
-        if (data?.ok && data.days?.[iso]){
-          const prev = FREE[iso] || []; const next = data.days[iso] || [];
-          if (!arraysEq(prev,next)){
-            FREE[iso] = next;
-            if (selDate===iso && selTime && !next.includes(selTime)){
-              selTime = null; const st = qs('#status'); if (st) st.textContent = 'Этот слот уже заняли';
-            }
-            renderSlots(iso); applyDaysState(curY, curM);
-          }
-        }
-      }
-      pollTimer = setInterval(refreshOnce, 10000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOnce(); }, { once:true });
-      refreshOnce();
-    }
-
-    // ========== UI ==========
-    document.getElementById('prevM').onclick = ()=> { if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } shiftMonth(-1); };
-    document.getElementById('nextM').onclick = ()=> { if (pollTimer) { clearInterval(pollTimer); pollTimer=null; } shiftMonth(1); };
-
-    qsa('.dur').forEach(b=> b.onclick = ()=>{
+    // ---------- UI ----------
+    document.getElementById('prevM').onclick = ()=>{ stopPolling(); shiftMonth(-1); };
+    document.getElementById('nextM').onclick = ()=>{ stopPolling(); shiftMonth(1); };
+    qsa('.dur').forEach(b=> b.onclick = async ()=>{
       qsa('.dur').forEach(x=>x.classList.remove('btn-primary'));
       b.classList.add('btn-primary');
       selDur = +b.dataset.dur || 30;
-      // при смене длительности — просто перерисовываем слоты (сервер отдаёт базовые старты)
-      if (selDate) renderSlots(selDate);
-      // и дёрнем быстрый refresh выбранного дня, чтобы кэш воркера учёл новую длительность
-      startDayPolling(selDate);
+      await syncMonth();                 // перетягиваем список с учётом 30/60/90
+      if (selDate) renderSlots(selDate); // и перерисовываем варианты
+      startPolling(selDate);             // чтобы кэш воркера различался по длительности
     });
-
     document.getElementById('bookBtn').onclick = onBook;
 
-    function nowYM(){ const d=new Date(); return { y:String(d.getFullYear()), m:dd2(d.getMonth()+1) }; }
-    function shiftMonth(delta){ const y=+curY, m=+curM; const d=new Date(y, m-1+delta, 1); curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1); syncMonth(); }
+    function shiftMonth(delta){
+      const y=+curY, m=+curM;
+      const d=new Date(y, m-1+delta, 1);
+      curY=String(d.getFullYear()); curM=dd2(d.getMonth()+1);
+      syncMonth();
+    }
 
-    function drawCalendar(y, m){
+    function drawCalendar(y,m){
       const grid = document.getElementById('calGrid'); grid.innerHTML='';
-      const mon = new Date(+y, +m-1, 1); const monLabel = mon.toLocaleDateString('ru-RU', { month:'long', year:'numeric' });
+      const mon = new Date(+y, +m-1, 1);
+      const monLabel = mon.toLocaleDateString('ru-RU',{month:'long',year:'numeric'});
       document.getElementById('monLabel').textContent = monLabel.charAt(0).toUpperCase()+monLabel.slice(1);
 
-      const dow = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+      const dow=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
       dow.forEach(d=>{ const div=document.createElement('div'); div.className='cal-cell cal-dow'; div.textContent=d; grid.appendChild(div); });
 
-      const firstDow = (new Date(+y, +m-1, 1).getDay()+6)%7;
-      for(let i=0;i<firstDow;i++){ const sp=document.createElement('div'); sp.className='cal-cell muted'; sp.textContent=''; grid.appendChild(sp); }
+      const firstDow=(new Date(+y,+m-1,1).getDay()+6)%7;
+      for(let i=0;i<firstDow;i++){ const sp=document.createElement('div'); sp.className='cal-cell muted'; grid.appendChild(sp); }
 
-      const daysInMonth = new Date(+y, +m, 0).getDate();
+      const daysInMonth = new Date(+y,+m,0).getDate();
       for(let d=1; d<=daysInMonth; d++){
         const iso = `${y}-${m}-${dd2(d)}`;
-        const btn = document.createElement('div'); btn.className='cal-cell'; btn.textContent=d; btn.dataset.iso=iso;
-        btn.onclick = ()=>{ selDate=iso; qsa('.cal-cell.sel',grid).forEach(x=>x.classList.remove('sel')); btn.classList.add('sel'); renderSlots(iso); startDayPolling(iso); };
+        const btn=document.createElement('div'); btn.className='cal-cell'; btn.textContent=d; btn.dataset.iso=iso;
+        btn.onclick=()=>{ selDate=iso; qsa('.cal-cell.sel',grid).forEach(x=>x.classList.remove('sel')); btn.classList.add('sel'); renderSlots(iso); startPolling(iso); };
         grid.appendChild(btn);
       }
-      applyDaysState(y, m);
+      applyDaysState(y,m);
     }
 
     function applyDaysState(y,m){
-      const grid = document.getElementById('calGrid');
-      qsa('.cal-cell', grid).forEach(cell=>{
+      const grid=document.getElementById('calGrid');
+      qsa('.cal-cell',grid).forEach(cell=>{
         if (cell.classList.contains('cal-dow') || !cell.dataset.iso) return;
-        const iso = cell.dataset.iso; const arr = FREE[iso] || [];
+        const arr = FREE[cell.dataset.iso] || [];
         const off = !(Array.isArray(arr) && arr.length>0);
         cell.classList.toggle('off', off); cell.classList.toggle('muted', off);
-        if (off) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
       });
     }
 
-    // Фильтр стартов по длительности: нужна непрерывная цепочка тайм-слотов
+    // фильтр стартов по длительности (цепочка 30/60/90)
     function filterStartsByDuration(starts, durMin, step){
       if (!Array.isArray(starts) || !starts.length) return [];
       const need = Math.ceil(durMin / step);
-      const toMin = t=>{ const m=t.match(/(\d{1,2}):(\d{2})/); return m? (+m[1])*60 + (+m[2]) : null; };
+      const toMin = t=>{ const m=t.match(/(\d{1,2}):(\d{2})/); return m? (+m[1])*60+(+m[2]) : null };
       const set = new Set(starts.map(toMin).filter(x=>x!=null));
-      return starts.filter(t=>{
-        const m=toMin(t); if(m==null) return false;
-        for(let i=0;i<need;i++){ if(!set.has(m+i*step)) return false }
-        return true;
-      });
+      return starts.filter(t=>{ const m=toMin(t); if(m==null) return false; for(let i=0;i<need;i++){ if(!set.has(m+i*step)) return false } return true; });
     }
 
     function renderSlots(iso){
-      const wrap = document.getElementById('slots'); wrap.innerHTML=''; wrap.classList.add('show'); selTime=null;
-      const arr = FREE[iso] || []; if (!arr.length){ wrap.innerHTML='<div class="muted">Нет свободных слотов</div>'; return; }
+      const wrap=qs('#slots'); wrap.innerHTML=''; wrap.classList.add('show'); selTime=null;
+      const arr = FREE[iso] || [];
+      if (!arr.length){ wrap.innerHTML='<div class="muted">Нет свободных слотов</div>'; return; }
       const filtered = filterStartsByDuration(arr, selDur, GRAN);
+      if (!filtered.length){ wrap.innerHTML='<div class="muted">Нет подходящих стартов для '+selDur+' мин</div>'; return; }
       filtered.forEach(label=>{
         const b=document.createElement('button'); b.className='btn'; b.textContent=label; b.dataset.time=label;
         b.onclick=()=>{ qsa('#slots .btn').forEach(x=>x.classList.remove('btn-primary')); b.classList.add('btn-primary'); selTime=label; };
         wrap.appendChild(b);
       });
-      if (!filtered.length) wrap.innerHTML='<div class="muted">Нет подходящих стартов для '+selDur+' мин</div>';
     }
 
-    async function syncMonth(){
-  const my = ++REQ; // защита от гонок
-
-  const first = `${curY}-${curM}-01`;
-  const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
-
-  const grid = document.getElementById('calGrid');
-  grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
-
-  const data = await apiGet('/api/slots/free', {
-    from: first,
-    to: last,
-    tz,
-    lead_min: 60,
-    duration_min: selDur   // <-- важно для 60/90
-  });
-
-  if (my !== REQ) return; // пришёл устаревший ответ
-
-  if (data && data.ok){
-    FREE = data.days || {};
-    GRAN = data.gran || 30;
-
-    drawCalendar(curY, curM);
-    applyDaysState(curY, curM);
-
-    // если текущая дата без слотов — выберем первую со слотами
-    if (!selDate || !FREE[selDate] || !FREE[selDate].length){
-      autoSelectFirstDayWithSlots();
-    } else {
+    // авто-выбор первой даты со слотами
+    function autoPickDay(){
+      const days = Object.keys(FREE).filter(d => (FREE[d]||[]).length);
+      if (!days.length) return;
+      selDate = days.includes(selDate) ? selDate : days[0];
+      const cell = document.querySelector(`#calGrid [data-iso="${selDate}"]`);
+      if (cell){ qsa('#calGrid .cal-cell.sel').forEach(x=>x.classList.remove('sel')); cell.classList.add('sel'); }
       renderSlots(selDate);
     }
-  } else {
-    document.getElementById('status').textContent = 'Ошибка загрузки слотов';
-  }
-}
-qsa('.dur').forEach(b => {
-  b.onclick = async () => {
-    qsa('.dur').forEach(x => x.classList.remove('btn-primary'));
-    b.classList.add('btn-primary');
-    selDur = +b.dataset.dur || 30;
-    await syncMonth();          // перетягиваем слоты с учётом 30/60/90
-  };
-});
 
+    // polling для выбранного дня (чтобы слот исчезал мгновенно)
+    function startPolling(iso){
+      stopPolling();
+      if (!iso) return;
+      const refresh = async ()=>{
+        const data = await apiGet('/api/slots/free', {from:iso, to:iso, tz, lead_min:60, duration_min: selDur});
+        if (data?.ok && data.days?.[iso]){
+          const next = data.days[iso] || [];
+          const same = JSON.stringify(next) === JSON.stringify(FREE[iso]||[]);
+          if (!same){ FREE[iso]=next; renderSlots(iso); applyDaysState(curY,curM); }
+        }
+      };
+      pollTimer = setInterval(refresh, 10000);
+      document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refresh(); }, { once:true });
+      refresh();
+    }
+    function stopPolling(){ if (pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 
-      const grid = document.getElementById('calGrid');
+    // подтяжка слотов за месяц
+    async function syncMonth(){
+      const my = ++REQ;
+      const first = `${curY}-${curM}-01`;
+      const last  = `${curY}-${curM}-${dd2(new Date(+curY, +curM, 0).getDate())}`;
+      const grid = qs('#calGrid');
       grid.innerHTML = '<div class="muted" style="grid-column:1/-1;text-align:center;padding:10px">Загружаю…</div>';
 
-      const data = await apiGet('/api/slots/free', {
-        from:first, to:last, gran:30, lead_min:60, tz,
-        duration_min: selDur // чтобы кэш воркера различал длительности
-      });
-
-      if (my !== REQ) return; // защита от гонок
+      const data = await apiGet('/api/slots/free', { from:first, to:last, tz, lead_min:60, duration_min: selDur });
+      if (my !== REQ) return;
 
       if (data?.ok){
         FREE = data.days || {}; GRAN = data.gran || 30;
-        drawCalendar(curY,curM);
-        applyDaysState(curY,curM);
-        autoSelectFirstDay();
+        drawCalendar(curY,curM); applyDaysState(curY,curM);
+        autoPickDay();
       } else {
-        document.getElementById('status').textContent = 'Ошибка загрузки слотов';
+        qs('#status').textContent = 'Ошибка загрузки слотов';
       }
     }
 
+    // бронь
+    let __busy=false;
     async function onBook(){
-      if (__busy) return; __busy = true;
+      if (__busy) return; __busy=true;
       try{
         if (!selDate || !selTime){ qs('#status').textContent='Выберите дату и время'; return; }
         const contact = qs('#contact').value.trim(); if(!contact){ qs('#status').textContent='Укажите контакт для связи'; return; }
 
-        // быстрый hold
         const hold = await apiPost('/api/slots/hold', { date:selDate, time:selTime, duration_min:selDur });
-        if (!hold?.ok){
-          qs('#status').textContent = (hold && hold.error==='bad_args') ? 'Нет tg_id — откройте через Telegram' : 'Слот уже занят, обновляю…';
-          await syncMonth(); return;
-        }
+        if (!hold?.ok){ qs('#status').textContent='Слот уже занят, обновляю…'; await syncMonth(); return; }
 
-        // финальная бронь
-        const res = await apiPost('/api/consult/book', {
-          date:selDate, time:selTime, duration_min:selDur, format:'call', contact
-        });
-
-        if (res?.ok){
-          qs('#status').textContent = (res.reused?'Бронь уже была: ':'Готово! Бронь ') + (res.booking_id||'создана');
-          await syncMonth();
-        } else {
-          qs('#status').textContent='Не удалось забронировать';
-          await syncMonth();
-        }
-      } finally { __busy = false; }
+        const res = await apiPost('/api/consult/book', { date:selDate, time:selTime, duration_min:selDur, format:'call', contact });
+        if (res?.ok){ qs('#status').textContent='Готово! Бронь '+(res.booking_id||'создана'); await syncMonth(); }
+        else { qs('#status').textContent='Не удалось забронировать'; await syncMonth(); }
+      } finally { __busy=false; }
     }
 
     // init
-    (function init(){
+    (function(){
       const ym=nowYM(); curY=ym.y; curM=ym.m;
-      // подсказка контакта из ТГ
-      try{
-        const u = tg?.initDataUnsafe?.user;
-        if (u?.username) qs('#contact').placeholder = '@'+u.username;
-      }catch(_){}
-      qsa('.dur')[0].classList.add('btn-primary'); // по умолчанию 30 мин
+      try{ const u=tg?.initDataUnsafe?.user; if(u?.username) qs('#contact').placeholder='@'+u.username; }catch(_){}
+      qsa('.dur')[0].classList.add('btn-primary'); // 30 мин по умолчанию
       syncMonth();
     })();
   </script>
