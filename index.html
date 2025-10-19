@@ -1126,6 +1126,155 @@ html,body{-webkit-text-size-adjust:100%}
   box-shadow: 0 10px 22px rgba(91,140,255,.35) !important;
 }
 
+<!-- ✅ ВСТАВЬТЕ ЭТО В КОНЕЦ index31_PUBLIC_SLOTS_FINAL3.html ПРЯМО ПЕРЕД </body> -->
+<!-- Патч: перевод фронта на Cloudflare Worker API без переписывания остального кода -->
+
+<!-- 1) Если в <head> у страницы есть CSP meta, добавьте в connect-src *.workers.dev -->
+<!-- Пример (замените свою строку CSP):
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval';
+           script-src 'self' https://script.google.com https://*.googleusercontent.com https://*.googleapis.com 'unsafe-inline' 'unsafe-eval';
+           connect-src 'self' https://*.workers.dev https://script.google.com https://*.googleusercontent.com https://*.googleapis.com data: blob:;
+           img-src 'self' https: data: blob:; media-src 'self' https: data: blob:; font-src 'self' https: data:; frame-src https: telegram.org *.telegram.org https://*.googleusercontent.com;">
+-->
+
+<script>
+(function(){
+  // === Конфигурация API ===
+  // Укажи только свой домен воркера (без хвоста /api)
+  const API_BASE = 'https://cifrovichkoff.cyberian13.workers.dev';
+
+  // Сохраняем в APP_CONFIG для остального кода
+  window.APP_CONFIG = Object.assign({}, window.APP_CONFIG || {}, { API_BASE });
+
+  // === Хелперы ===
+  function tgId(){
+    try{ return (Telegram && Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.id) || null; }
+    catch(_){ return null; }
+  }
+  function qs(s,root=document){ return root.querySelector(s); }
+  function qsa(s,root=document){ return Array.from(root.querySelectorAll(s)); }
+  function dd2(n){ return String(n).padStart(2,'0'); }
+  function urlWithParams(base, params){ const u = new URL(base); Object.entries(params||{}).forEach(([k,v])=>{ if(v!==undefined && v!==null) u.searchParams.set(k, String(v)); }); return u; }
+
+  async function apiGet(path, params){
+    const u = urlWithParams(API_BASE + path, params);
+    const r = await fetch(u.toString(), { method:'GET', credentials:'omit' });
+    const t = await r.text(); try{ return JSON.parse(t); }catch{ return { ok:false, error:'bad_json', raw:t }; }
+  }
+  async function apiPost(path, body){
+    body = body || {}; // автоматически подставим tg_id, если его нет
+    if (!body.tg_id && tgId()) body.tg_id = String(tgId());
+    const r = await fetch(API_BASE + path, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body), credentials:'omit' });
+    const t = await r.text(); try{ return JSON.parse(t); }catch{ return { ok:false, error:'bad_json', raw:t }; }
+  }
+
+  // === Публичные методы, которыми будет пользоваться ваш код ===
+  window.apiBootstrap = async function(){
+    return apiPost('/api/bootstrap', { data: { tg_id: String(tgId()||'0') } });
+  };
+
+  window.apiEvent = async function(type, data){
+    data = data || {}; if (!data.tg_id && tgId()) data.tg_id = String(tgId());
+    if (type === 'hold_slot')          return apiPost('/api/slots/hold', data);
+    if (type === 'consult_booking')    return apiPost('/api/consult/book', data);
+    // для обратной совместимости: если вдруг кто-то зовет {type:'consult_booking', ...}
+    if (data && data.type === 'consult_booking') return apiPost('/api/consult/book', data);
+    return { ok:false, error:'unknown_event' };
+  };
+
+  // === Слоты (месяц целиком) ===
+  async function fetchFreeSlotsMonth(y, m){
+    const first = `${y}-${m}-01`;
+    const last  = `${y}-${m}-${dd2(new Date(+y, +m, 0).getDate())}`;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow';
+    const data = await apiGet('/api/slots/free', { from:first, to:last, gran:30, lead_min:60, tz });
+    if (data && data.ok){ window.__FREE__ = data.days || {}; window.__GRAN__ = data.gran || 30; }
+    return data;
+  }
+
+  // === Переопределяем имеющиеся функции, чтобы фронт работал с воркером ===
+  window.loadFreeSlotsForMonth = async function(y, m){
+    return fetchFreeSlotsMonth(y,m);
+  };
+
+  // Перерисовка статуса дней в календаре
+  function applyDaysState(y, m){
+    const grid = qs('#cal .cal-grid'); if(!grid) return;
+    grid.querySelectorAll('.cal-cell').forEach(cell=>{
+      if(cell.classList.contains('cal-dow')) return;
+      const day = (cell.dataset.day || cell.textContent || '').trim();
+      if(!day || /\D/.test(day)) return;
+      const iso = `${y}-${m}-${dd2(day)}`; cell.dataset.iso = iso;
+      const arr = (window.__FREE__ && window.__FREE__[iso]) || [];
+      const off = !(Array.isArray(arr) && arr.length>0);
+      cell.classList.toggle('off', off); cell.classList.toggle('muted', off);
+      if (off) cell.setAttribute('aria-disabled','true'); else cell.removeAttribute('aria-disabled');
+    });
+  }
+
+  // Авто‑инициализация после первичной отрисовки календаря
+  function parseHeadYM(){
+    const h = qs('#cal .cal-head .mon'); if(!h) return null;
+    const t = (h.textContent||'').trim().toLowerCase(); // "Октябрь 2025"
+    const map = { 'янв':'01','фев':'02','мар':'03','апр':'04','мая':'05','май':'05','июн':'06','июл':'07','авг':'08','сен':'09','сент':'09','окт':'10','ноя':'11','дек':'12' };
+    const m = t.match(/([а-яa-zё]+)\s+(\d{4})/i); if(!m) return null;
+    const mm = map[m[1].slice(0,3).replace('ё','е')]; return mm ? { y:m[2], m:mm } : null;
+  }
+
+  async function syncMonth(){
+    const ym = parseHeadYM(); if(!ym) return;
+    const res = await fetchFreeSlotsMonth(ym.y, ym.m);
+    if (res && res.ok) applyDaysState(ym.y, ym.m);
+  }
+
+  // Триггеры перезагрузки слотов при смене месяца
+  document.addEventListener('click', (ev)=>{
+    if (ev.target.closest('#cal #prevM') || ev.target.closest('#cal #nextM')){
+      setTimeout(syncMonth, 0);
+    }
+  });
+  // Стартовая загрузка
+  setTimeout(syncMonth, 0);
+
+  // === Прокинем выбранную дату/время в consult_booking
+  function currentSelection(){
+    const selBtn = qs('#slots .btn.btn-primary, #slots .btn.active');
+    const time = selBtn ? (selBtn.dataset.time || selBtn.textContent || '').trim() : (window.scope && (scope._selTime||scope.selTime));
+    const date = (window.__selDate) || (window.scope && (scope._selDate||scope.selDate));
+    const dur  = (window.scope && (+scope._durMin||+scope.durMin)) || 30;
+    return { date, time, duration_min: dur };
+  }
+
+  // Переопределим возможный submit-код, если он вызывает apiEvent('consult_booking') без duration
+  (function(){
+    const prev = window.apiEvent;
+    window.apiEvent = async function(type, data){
+      data = data || {};
+      if (type==='consult_booking' || (data && data.type==='consult_booking')){
+        const cur = currentSelection();
+        if (!data.date && cur.date) data.date = cur.date;
+        if (!data.time && cur.time) data.time = cur.time;
+        if (!data.duration_min && cur.duration_min) data.duration_min = cur.duration_min;
+        return apiPost('/api/consult/book', data);
+      }
+      if (type==='hold_slot'){
+        const cur = currentSelection();
+        if (!data.date && cur.date) data.date = cur.date;
+        if (!data.time && cur.time) data.time = cur.time;
+        if (!data.duration_min && cur.duration_min) data.duration_min = cur.duration_min;
+        return apiPost('/api/slots/hold', data);
+      }
+      // прочее — к предыдущей реализации, если нужна
+      if (typeof prev === 'function') return prev(type, data);
+      return { ok:false, error:'unknown_event' };
+    };
+  })();
+})();
+</script>
+<!-- /ПАТЧ ДЛЯ ВОРКЕРА -->
+
+  
 </style>
 </head>
 <body>
@@ -2842,7 +2991,7 @@ const pages = document.querySelectorAll('section.page');
 // ==== v16-safe config (only placeholders; nothing breaks if empty) ====
 window.APP_CONFIG = {
   TG_BOT_USERNAME: 'serge_kamensky_bot',  // поменяешь здесь
-  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbyeOLIdsEiV2HIWgA1W0Evs9v3KkosjAgQNoLp06e8KnmMdHH06futzIhjWeIw8f3Hx/exec',                        // вставишь URL Apps Script
+  GAS_WEBHOOK: 'https://script.google.com/macros/s/AKfycbw8apIpvm-0LXi7sMxEGOaYFp-DAu0hQhuiK8Dmo7jgvsnXmSb1A0fxzyML08-MoMtJ/exec',                        // вставишь URL Apps Script
   API_KEY: '',                            // опционально
   USE_TG_SIGNATURE: true
 };
